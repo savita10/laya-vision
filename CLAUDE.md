@@ -75,6 +75,8 @@ backbones, multilingual vision, serving infrastructure beyond a demo script.
    a disconnect.
 6. Design changes are made by the human and recorded in DECISIONS.md before
    implementation. Claude Code proposes; the human decides.
+7. Commit messages contain no AI attribution: no Co-Authored-By trailers,
+   no "Generated with" lines, no session links. Plain messages only.   
 
 ## Phases and gates
 - P0 Foundations: reproduce Laya's own notebook + eval (adapted to Colab,
