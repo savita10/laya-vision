@@ -6,8 +6,12 @@ Images come from streaming the RVL-CDIP tar (gzip, not seekable), so a full
 pass reads up to 38.7 GB over the network but stores nothing else; the
 stream stops as soon as every sampled image is found.
 
+With --secondary <split>_secondary.jsonl, writes audit_sheet_secondary.csv
+instead, adding the distilled handwriting/legibility answers and blank
+columns to judge each.
+
 Re-runnable: images already in <out> are not fetched again, and an existing
-audit_sheet.csv is never overwritten (it holds the human's review).
+sheet is never overwritten (it holds the human's review).
 
     python scripts/audit_sample.py --records data/rvl_v1/train.jsonl --n 200 --seed 7 --out audit/
     python scripts/audit_sample.py ... --limit 2000   # dry run: stop after 2,000 tar members
@@ -26,6 +30,31 @@ def image_filename(record):
     return f"{record['id']}_{record['label_name'].replace(' ', '_')}.png"
 
 
+def load_secondary(paths):
+    """{id: secondary record} from distill_secondary_labels.py outputs."""
+    out = {}
+    for path in paths:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    row = json.loads(line)
+                    out[row["id"]] = row
+    return out
+
+
+def secondary_cells(row):
+    """[handwriting, p_handwriting, handwriting_correct, legibility, legibility_correct]"""
+    if row is None:
+        return ["", "", "", "", ""]
+    if row.get("questions") is None:
+        return [f"ERROR: {row.get('error', '')}", "", "", "", ""]
+    hw = row["questions"]["handwriting"]
+    lg = row["questions"]["legibility"]
+    level = lg["criteria"][lg["answer"]].split(":")[0]
+    return [str(hw["answer"]).lower(), f"{hw['probabilities']['true']:.3f}", "",
+            f"{lg['answer']} ({level})", ""]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stratified audit sample of RVL-CDIP train records")
     parser.add_argument("--records", required=True, help="train JSONL from build_dataset.py")
@@ -33,6 +62,8 @@ def main():
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--out", required=True)
     parser.add_argument("--limit", type=int, default=None, help="dry run: stop after N tar members")
+    parser.add_argument("--secondary", nargs="+", default=None,
+                        help="<split>_secondary.jsonl file(s); writes audit_sheet_secondary.csv with their answers")
     args = parser.parse_args()
 
     with open(args.records, encoding="utf-8") as f:
@@ -47,16 +78,32 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    sheet = out / "audit_sheet.csv"
+    if args.secondary:
+        # Separate sheet, so a completed doc-type audit_sheet.csv is never touched.
+        sheet = out / "audit_sheet_secondary.csv"
+        header = ["id", "label_name", "looks_correct",
+                  "handwriting", "p_handwriting", "handwriting_correct",
+                  "legibility", "legibility_correct", "notes"]
+        secondary = load_secondary(args.secondary)
+        missing = [r["id"] for r in sample if r["id"] not in secondary]
+        if missing:
+            print(f"Warning: {len(missing)} sampled records have no secondary labels (blank in sheet), "
+                  f"e.g. {missing[:3]}")
+        rows = [[r["id"], r["label_name"], ""] + secondary_cells(secondary.get(r["id"])) + [""]
+                for r in sample]
+    else:
+        sheet = out / "audit_sheet.csv"
+        header = ["id", "label_name", "looks_correct", "notes"]
+        rows = [[r["id"], r["label_name"], "", ""] for r in sample]
+
     if sheet.exists():
         print(f"{sheet} exists; leaving it untouched.")
     else:
         with open(sheet, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["id", "label_name", "looks_correct", "notes"])
-            for r in sample:
-                writer.writerow([r["id"], r["label_name"], "", ""])
-        print(f"Wrote {sheet} ({len(sample)} rows)")
+            writer.writerow(header)
+            writer.writerows(rows)
+        print(f"Wrote {sheet} ({len(rows)} rows)")
 
     wanted = {r["image_path"]: r for r in sample if not (out / image_filename(r)).exists()}
     if not wanted:
