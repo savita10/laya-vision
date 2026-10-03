@@ -1,17 +1,27 @@
 """Distil the two secondary labels (handwriting noul, legibility score) with a small VLM.
 
 For every record in the given <split>.jsonl files, the image is fetched from
-the RVL-CDIP tar stream and the VLM answers two questions. Answers are read
-from next-token probabilities over the allowed answer tokens (one forward
-pass per question, no free generation), so every output parses and carries a
-probability distribution usable as a soft training target.
+the RVL-CDIP tar stream and the VLM answers three prompts: handwriting, its
+inverse ("is everything printed or typed?") and legibility. Answers are read
+from next-token probabilities over the allowed answer tokens (no free
+generation), so every output parses and carries a probability distribution
+usable as a soft training target. The handwriting p(true) is the mean of
+p(yes) on the direct prompt and p(no) on the inverse one, which cancels the
+model's bias towards answering "yes".
 
-Outputs, next to each records file:
+Each image is encoded once: the shared prefix (system turn + image) runs
+through the model a single time and its KV cache is reused for the three
+short question suffixes. --check-cache also scores every image with full,
+uncached prompts and prints the largest probability difference, to confirm
+the cached path matches.
+
+Outputs, in --out-dir (default: next to each records file):
   <split>_secondary.jsonl          one line per record (sorted by image_index once complete)
   <split>_secondary.done.log       ids whose output line is durably written (resume state)
-  <split>_secondary.manifest.json  model, revision, prompts, dtype, max_pixels
+  <split>_secondary.manifest.json  model, revision, prompt version, prompts, dtype, pixel limits, ids
 A resumed run must use the same configuration as the manifest; otherwise it
-refuses, so labels from two configurations never mix in one file.
+refuses, so labels from two configurations (or prompt versions) never mix in
+one file.
 
 Test records are labelled under a recorded exception (DECISIONS.md
 2026-10-03), so all splits share one pinned environment. Condition: no human
@@ -19,10 +29,14 @@ or agent reads or aggregates test secondary labels until final_eval.py runs.
 The script prints a notice when labelling test and never prints test answers.
 
     python scripts/distill_secondary_labels.py --records data/train.jsonl data/val.jsonl
-    python scripts/distill_secondary_labels.py --records data/train.jsonl --limit 16   # dry run
+    python scripts/distill_secondary_labels.py --records data/val.jsonl --ids rvl-val-034620,... \\
+        --out-dir runs/v3_native --check-cache                      # fixed-set A/B
+    python scripts/distill_secondary_labels.py ... --min-pixels 1568000 --max-pixels 2007040 \\
+        --out-dir runs/v3_enlarged                                  # enlarged images
 """
 
 import argparse
+import copy
 import io
 import json
 import os
@@ -38,62 +52,90 @@ import rvlcdip
 # - Strong on document images for its size (DocVQA ~90 reported), with native
 #   dynamic resolution, so scans are seen near full resolution rather than
 #   squashed to a fixed square.
-# - ~4.4 GB in fp16; fits a 16 GB T4 with room for batching. Native
-#   transformers support, no trust_remote_code.
+# - ~4.4 GB in fp16; fits a 16 GB T4. Native transformers support, no
+#   trust_remote_code.
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 MODEL_REVISION = "895c3a49bc3fa70a340399125c650a463535e71c"
-PROMPT_VERSION = "v2"  # v2: signatures excluded from handwriting (DECISIONS.md 2026-10-03)
+# v2: signatures excluded from handwriting (DECISIONS.md 2026-10-03).
+# v3: direct handwriting question with examples + inverse question for
+#     debiasing; legibility levels with observable anchors.
+PROMPT_VERSION = "v3"
 
 HANDWRITING_ID = "handwriting"
 HANDWRITING_INSTRUCTIONS = "This document contains handwriting beyond signatures."
 HANDWRITING_PROMPT = (
-    "Statement: This document contains handwritten text or handwritten annotations "
-    "other than signatures. A signature alone does not count.\n"
-    "Is the statement true for this document? Answer yes or no."
+    "Apart from any signatures, does this scanned document contain anything written by hand, "
+    "such as handwritten notes, filled-in form fields, dates, numbers, corrections or margin "
+    "annotations? Answer yes or no."
+)
+# Inverse wording: "yes" here means no handwriting.
+HANDWRITING_INVERSE_ID = "handwriting_inverse"
+HANDWRITING_INVERSE_PROMPT = (
+    "Other than signatures, is everything on this scanned document printed or typed, with "
+    "nothing written by hand? Answer yes or no."
 )
 
 LEGIBILITY_ID = "legibility"
 LEGIBILITY_INSTRUCTIONS = "How legible is this document?"
 LEGIBILITY_LEVELS = [
-    "unreadable: the text cannot be made out",
-    "poor: much of the text is hard to read (faint, blurred, noisy or degraded)",
-    "readable: the text can be read, with some noise or degradation",
-    "clean: crisp, clear text that is easy to read",
+    "unreadable: most of the text cannot be read at all",
+    "poor: many words are hard to make out because of fading, blur, noise or low resolution",
+    "readable: almost all text can be read, though the scan shows some noise, faintness or blur",
+    "clean: sharp, high-contrast text that is easy to read throughout",
 ]
 LEGIBILITY_PROMPT = (
-    "How legible is this document?\n"
-    + "".join(f"{i + 1}. {level}\n" for i, level in enumerate(LEGIBILITY_LEVELS))
-    + f"Answer with a single digit from 1 to {len(LEGIBILITY_LEVELS)}."
+    "Rate how easy the text on this scanned page is to read.\n"
+    + "".join(f"{i + 1} = {level}\n" for i, level in enumerate(LEGIBILITY_LEVELS))
+    + "Answer with the single digit 1, 2, 3 or 4."
 )
+
+PROMPTS = {
+    HANDWRITING_ID: HANDWRITING_PROMPT,
+    HANDWRITING_INVERSE_ID: HANDWRITING_INVERSE_PROMPT,
+    LEGIBILITY_ID: LEGIBILITY_PROMPT,
+}
 
 # Answer strings scored at the first generated position. Case variants are
 # summed so the model's capitalisation preference does not bias the answer.
-HANDWRITING_ANSWERS = {"false": ["no", "No"], "true": ["yes", "Yes"]}
+YES_NO_ANSWERS = {"false": ["no", "No"], "true": ["yes", "Yes"]}
 LEGIBILITY_ANSWERS = {str(i): [str(i + 1)] for i in range(len(LEGIBILITY_LEVELS))}
+ANSWERS = {
+    HANDWRITING_ID: YES_NO_ANSWERS,
+    HANDWRITING_INVERSE_ID: YES_NO_ANSWERS,
+    LEGIBILITY_ID: LEGIBILITY_ANSWERS,
+}
+
+VISION_END = "<|vision_end|>"
+GRID_LOG_IMAGES = 20  # print the resolution the model receives for the first N images
 
 
-def output_paths(records_path):
+def output_paths(records_path, out_dir=None):
     p = Path(records_path)
     stem = p.name[:-len(".jsonl")] if p.name.endswith(".jsonl") else p.stem
+    d = Path(out_dir) if out_dir else p.parent
     return {
-        "out": p.with_name(f"{stem}_secondary.jsonl"),
-        "done": p.with_name(f"{stem}_secondary.done.log"),
-        "manifest": p.with_name(f"{stem}_secondary.manifest.json"),
+        "out": d / f"{stem}_secondary.jsonl",
+        "done": d / f"{stem}_secondary.done.log",
+        "manifest": d / f"{stem}_secondary.manifest.json",
     }
 
 
-def config_manifest(args):
+def config_manifest(args, ids):
     return {
         "model": MODEL_ID,
         "model_revision": MODEL_REVISION,
         "prompt_version": PROMPT_VERSION,
         "dtype": args.dtype,
+        "min_pixels": args.min_pixels,
         "max_pixels": args.max_pixels,
+        "single_encode": True,
+        "ids": sorted(ids) if ids else None,
         "dataset": rvlcdip.DATASET_REPO,
         "dataset_revision": rvlcdip.DATASET_REVISION,
         "questions": {
             HANDWRITING_ID: {"type": "noul", "instructions": HANDWRITING_INSTRUCTIONS,
-                             "prompt": HANDWRITING_PROMPT},
+                             "prompt": HANDWRITING_PROMPT, "inverse_prompt": HANDWRITING_INVERSE_PROMPT,
+                             "combine": "mean(p_yes(prompt), p_no(inverse_prompt))"},
             LEGIBILITY_ID: {"type": "score", "instructions": LEGIBILITY_INSTRUCTIONS,
                             "criteria": LEGIBILITY_LEVELS, "prompt": LEGIBILITY_PROMPT},
         },
@@ -126,16 +168,17 @@ def write_jsonl_atomic(path, rows):
 class SplitState:
     """Per records file: what is done, and where outputs go."""
 
-    def __init__(self, records_path, records, manifest):
+    def __init__(self, records_path, records, manifest, out_dir=None):
         self.records = records
-        self.paths = output_paths(records_path)
+        self.paths = output_paths(records_path, out_dir)
+        self.paths["out"].parent.mkdir(parents=True, exist_ok=True)
 
         if self.paths["manifest"].exists():
             with open(self.paths["manifest"], encoding="utf-8") as f:
                 existing = json.load(f)
             if existing != manifest:
                 raise SystemExit(f"{self.paths['manifest']} was written with a different configuration; "
-                                 "refusing to mix labels. Use the original settings or a new output location.")
+                                 "refusing to mix labels. Use the original settings or a new --out-dir.")
         else:
             with open(self.paths["manifest"], "w", encoding="utf-8", newline="\n") as f:
                 json.dump(manifest, f, indent=2, ensure_ascii=False)
@@ -175,84 +218,172 @@ class SplitState:
 
 
 class Distiller:
-    def __init__(self, device, dtype, max_pixels):
+    def __init__(self, device, dtype, min_pixels, max_pixels):
         import torch
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
         self.torch = torch
         self.device = device
         torch_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}[dtype]
+        pixel_kwargs = {"max_pixels": max_pixels}
+        if min_pixels is not None:
+            pixel_kwargs["min_pixels"] = min_pixels
         self.processor = AutoProcessor.from_pretrained(
-            MODEL_ID, revision=MODEL_REVISION, max_pixels=max_pixels, token=rvlcdip.hf_token())
-        self.processor.tokenizer.padding_side = "left"
+            MODEL_ID, revision=MODEL_REVISION, token=rvlcdip.hf_token(), **pixel_kwargs)
+        self._apply_pixel_limits(min_pixels, max_pixels)
+        self.tokenizer = self.processor.tokenizer
         self.model = AutoModelForImageTextToText.from_pretrained(
             MODEL_ID, revision=MODEL_REVISION, torch_dtype=torch_dtype, token=rvlcdip.hf_token(),
         ).to(device).eval()
-        self.prompts = {
-            HANDWRITING_ID: self._chat(HANDWRITING_PROMPT),
-            LEGIBILITY_ID: self._chat(LEGIBILITY_PROMPT),
-        }
-        self.answer_ids = {
-            HANDWRITING_ID: self._token_ids(HANDWRITING_ANSWERS),
-            LEGIBILITY_ID: self._token_ids(LEGIBILITY_ANSWERS),
-        }
+        self.rope_index = self._find_rope_index()
 
-    def _chat(self, prompt):
-        messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
-        return self.processor.apply_chat_template(messages, add_generation_prompt=True)
+        self.prefix_text, suffix_texts = self._split_prompts()
+        self.full_texts = {q: self.prefix_text + s for q, s in suffix_texts.items()}
+        self.suffix_ids = {
+            q: torch.tensor([self.tokenizer(s, add_special_tokens=False)["input_ids"]], device=device)
+            for q, s in suffix_texts.items()
+        }
+        self.answer_ids = {q: self._token_ids(a) for q, a in ANSWERS.items()}
+        ip = self.processor.image_processor
+        self.patch_size = getattr(ip, "patch_size", 14)
+        self.merge_size = getattr(ip, "merge_size", 2)
+
+    def _apply_pixel_limits(self, min_pixels, max_pixels):
+        # The kwarg route has moved between transformers versions; set every
+        # known spelling so the limits apply. image_grid_thw in the log shows
+        # the resolution actually used.
+        ip = self.processor.image_processor
+        if min_pixels is not None and hasattr(ip, "min_pixels"):
+            ip.min_pixels = min_pixels
+        if hasattr(ip, "max_pixels"):
+            ip.max_pixels = max_pixels
+        size = getattr(ip, "size", None)
+        if isinstance(size, dict) and ("longest_edge" in size or "shortest_edge" in size):
+            size = dict(size)
+            size["longest_edge"] = max_pixels
+            if min_pixels is not None:
+                size["shortest_edge"] = min_pixels
+            ip.size = size
+
+    def _find_rope_index(self):
+        for owner in (self.model, getattr(self.model, "model", None)):
+            fn = getattr(owner, "get_rope_index", None)
+            if fn is not None:
+                return fn
+        return None
+
+    def _split_prompts(self):
+        """Split each chat prompt into the shared prefix (through the image) and its suffix."""
+        prefix, suffixes = None, {}
+        for qid, prompt in PROMPTS.items():
+            messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
+            full = self.processor.apply_chat_template(messages, add_generation_prompt=True)
+            cut = full.index(VISION_END) + len(VISION_END)
+            if prefix is None:
+                prefix = full[:cut]
+            elif full[:cut] != prefix:
+                raise RuntimeError("Chat prompts do not share a common prefix; single encode is not possible.")
+            suffixes[qid] = full[cut:]
+            # Tokenising the halves separately must equal tokenising the whole.
+            whole = self.tokenizer(full, add_special_tokens=False)["input_ids"]
+            parts = (self.tokenizer(prefix, add_special_tokens=False)["input_ids"]
+                     + self.tokenizer(full[cut:], add_special_tokens=False)["input_ids"])
+            if whole != parts:
+                raise RuntimeError(f"Prefix/suffix tokenisation differs from the full prompt for {qid}.")
+        return prefix, suffixes
 
     def _token_ids(self, answers):
         out = {}
         for key, strings in answers.items():
             ids = []
             for s in strings:
-                tok = self.processor.tokenizer.encode(s, add_special_tokens=False)
+                tok = self.tokenizer.encode(s, add_special_tokens=False)
                 if len(tok) != 1:
                     raise RuntimeError(f"Answer {s!r} is not a single token for {MODEL_ID}: {tok}")
                 ids.append(tok[0])
             out[key] = ids
         return out
 
-    def _next_token_probs(self, texts, images):
-        inputs = self.processor(text=texts, images=images, return_tensors="pt", padding=True).to(self.device)
-        with self.torch.no_grad():
-            try:
-                logits = self.model(**inputs, logits_to_keep=1).logits[:, -1, :]
-            except TypeError:  # older transformers without logits_to_keep
-                logits = self.model(**inputs).logits[:, -1, :]
-        return self.torch.softmax(logits.float(), dim=-1).cpu()
+    def _forward(self, **kwargs):
+        try:
+            return self.model(**kwargs, logits_to_keep=1)
+        except TypeError:  # older transformers without logits_to_keep
+            return self.model(**kwargs)
 
-    def __call__(self, images):
-        """Return one {question_id: (probabilities, answer_mass)} dict per image."""
-        qids = list(self.prompts)
-        texts = [self.prompts[q] for q in qids for _ in images]
-        probs = self._next_token_probs(texts, [img for _ in qids for img in images])
-        results = [{} for _ in images]
-        for qi, qid in enumerate(qids):
-            for ii in range(len(images)):
-                row = probs[qi * len(images) + ii]
-                mass = {k: float(row[ids].sum()) for k, ids in self.answer_ids[qid].items()}
-                total = sum(mass.values())
-                if not total > 0:  # also catches NaN from fp16 overflow
-                    raise FloatingPointError(f"No probability mass on answer tokens for {qid}")
-                results[ii][qid] = ({k: v / total for k, v in mass.items()}, total)
-        return results
+    def _answer_probs(self, qid, logits):
+        probs = self.torch.softmax(logits.float(), dim=-1).cpu()
+        mass = {k: float(probs[ids].sum()) for k, ids in self.answer_ids[qid].items()}
+        total = sum(mass.values())
+        if not total > 0:  # also catches NaN from fp16 overflow
+            raise FloatingPointError(f"No probability mass on answer tokens for {qid}")
+        return {k: v / total for k, v in mass.items()}, total
+
+    def __call__(self, image):
+        """Score one image: {"answers": {qid: (probabilities, answer_mass)}, "image": {...}}."""
+        torch = self.torch
+        with torch.no_grad():
+            prefix = self.processor(text=[self.prefix_text], images=[image], return_tensors="pt").to(self.device)
+            prefix_len = prefix["input_ids"].shape[1]
+            cache = self._forward(**prefix, use_cache=True).past_key_values
+
+            answers = {}
+            for qid, suffix in self.suffix_ids.items():
+                n = suffix.shape[1]
+                attention = torch.ones((1, prefix_len + n), dtype=prefix["attention_mask"].dtype, device=self.device)
+                position_ids = None
+                if self.rope_index is not None:
+                    full_ids = torch.cat([prefix["input_ids"], suffix], dim=1)
+                    position_ids = self.rope_index(full_ids, prefix["image_grid_thw"], None, attention)[0]
+                    position_ids = position_ids[..., prefix_len:]
+                out = self._forward(
+                    input_ids=suffix,
+                    attention_mask=attention,
+                    position_ids=position_ids,
+                    past_key_values=copy.deepcopy(cache),
+                    cache_position=torch.arange(prefix_len, prefix_len + n, device=self.device),
+                    use_cache=True,
+                )
+                answers[qid] = self._answer_probs(qid, out.logits[0, -1])
+
+        t, h, w = (int(x) for x in prefix["image_grid_thw"][0])
+        info = {
+            "input_size": list(image.size),
+            "grid_thw": [t, h, w],
+            "model_size": [w * self.patch_size, h * self.patch_size],
+            "visual_tokens": t * h * w // (self.merge_size ** 2),
+        }
+        return {"answers": answers, "image": info}
+
+    def reference(self, image):
+        """Full, uncached prompts (the pre-optimisation path), for --check-cache."""
+        answers = {}
+        with self.torch.no_grad():
+            for qid, text in self.full_texts.items():
+                inputs = self.processor(text=[text], images=[image], return_tensors="pt").to(self.device)
+                answers[qid] = self._answer_probs(qid, self._forward(**inputs).logits[0, -1])
+        return answers
 
 
 def build_output(record, result):
-    hw_probs, hw_mass = result[HANDWRITING_ID]
-    lg_probs, lg_mass = result[LEGIBILITY_ID]
+    answers = result["answers"]
+    direct, direct_mass = answers[HANDWRITING_ID]
+    inverse, inverse_mass = answers[HANDWRITING_INVERSE_ID]
+    p_true = (direct["true"] + inverse["false"]) / 2
+    lg_probs, lg_mass = answers[LEGIBILITY_ID]
     return {
         "id": record["id"],
         "split": record["split"],
         "image_index": record["image_index"],
+        "prompt_version": PROMPT_VERSION,
+        "image": result["image"],
         "questions": {
             HANDWRITING_ID: {
                 "type": "noul",
                 "instructions": HANDWRITING_INSTRUCTIONS,
-                "answer": hw_probs["true"] >= 0.5,
-                "probabilities": hw_probs,
-                "answer_mass": round(hw_mass, 6),
+                "answer": p_true >= 0.5,
+                "probabilities": {"false": 1 - p_true, "true": p_true},
+                "components": {"direct_p_yes": direct["true"], "inverse_p_yes": inverse["true"]},
+                "answer_mass": {"direct": round(direct_mass, 6), "inverse": round(inverse_mass, 6)},
             },
             LEGIBILITY_ID: {
                 "type": "score",
@@ -268,35 +399,66 @@ def build_output(record, result):
 
 def error_output(record, message):
     return {"id": record["id"], "split": record["split"], "image_index": record["image_index"],
-            "questions": None, "error": message}
+            "prompt_version": PROMPT_VERSION, "questions": None, "error": message}
 
 
 def main():
     parser = argparse.ArgumentParser(description="Distil handwriting/legibility labels with a VLM")
-    parser.add_argument("--records", nargs="+", required=True, help="<split>.jsonl files (train/val only)")
+    parser.add_argument("--records", nargs="+", required=True, help="<split>.jsonl files")
+    parser.add_argument("--ids", default=None, help="comma-separated record ids: label only these")
+    parser.add_argument("--out-dir", default=None, help="output folder (default: next to each records file)")
     parser.add_argument("--limit", type=int, default=None, help="dry run: label at most N new records")
-    parser.add_argument("--batch-size", type=int, default=4, help="images per forward (x2 prompts)")
+    parser.add_argument("--commit-every", type=int, default=8, help="images per durable commit")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", choices=["fp16", "bf16", "fp32"], default="fp16",
                         help="fp16 on T4 (no native bf16)")
+    parser.add_argument("--min-pixels", type=int, default=None,
+                        help="Qwen2-VL resize floor; smaller images are enlarged (default: processor's own)")
     parser.add_argument("--max-pixels", type=int, default=1024 * 28 * 28,
                         help="Qwen2-VL resize cap; ~1 visual token per 28x28 px")
+    parser.add_argument("--check-cache", action="store_true",
+                        help="also score each image with full uncached prompts and print the max difference")
     parser.add_argument("--max-retries", type=int, default=5, help="tar stream restarts on network errors")
     args = parser.parse_args()
+    if args.min_pixels is not None and args.min_pixels > args.max_pixels:
+        raise SystemExit("--min-pixels must not exceed --max-pixels.")
 
+    ids = [i.strip() for i in args.ids.split(",") if i.strip()] if args.ids else None
     loaded = {}
     for path in args.records:
         records = read_jsonl(Path(path))
-        if any(r["split"] == "test" for r in records):
-            print("\n" + "!" * 78)
-            print(f"!! LABELLING TEST RECORDS from {path}")
-            print("!! Recorded exception, DECISIONS.md 2026-10-03: no human or agent may read or")
-            print("!! aggregate test secondary labels until final_eval.py runs.")
-            print("!" * 78 + "\n", flush=True)
+        if ids is not None:
+            id_set = set(ids)
+            records = [r for r in records if r["id"] in id_set]
+            if not records:
+                continue  # no requested ids in this file: write nothing for it
         loaded[path] = records
+    if ids is not None:
+        found = {r["id"] for rs in loaded.values() for r in rs}
+        unknown = [i for i in ids if i not in found]
+        if unknown:
+            raise SystemExit(f"{len(unknown)} ids not in --records: {unknown[:10]}")
+    has_test = any(r["split"] == "test" for rs in loaded.values() for r in rs)
+    if has_test:
+        if args.check_cache:
+            raise SystemExit("--check-cache prints per-image comparisons; not allowed on test records.")
+        print("\n" + "!" * 78)
+        print("!! LABELLING TEST RECORDS")
+        print("!! Recorded exception, DECISIONS.md 2026-10-03: no human or agent may read or")
+        print("!! aggregate test secondary labels until final_eval.py runs.")
+        print("!" * 78 + "\n", flush=True)
 
-    manifest = config_manifest(args)
-    states = [SplitState(p, records, manifest) for p, records in loaded.items()]
+    # The work queue is keyed by image path, so a repeated image would send its label to the wrong file.
+    seen_paths = set()
+    for records in loaded.values():
+        for record in records:
+            if record["image_path"] in seen_paths:
+                raise SystemExit(f"Image {record['image_path']} ({record['id']}) appears more than once "
+                                 "across the records files; they must not overlap.")
+            seen_paths.add(record["image_path"])
+
+    manifest = config_manifest(args, ids)
+    states = [SplitState(p, records, manifest, args.out_dir) for p, records in loaded.items()]
     wanted = {}
     for state in states:
         for record in state.pending():
@@ -319,41 +481,50 @@ def main():
     STREAM_ERRORS = (requests.RequestException, urllib3.exceptions.HTTPError,
                      tarfile.TarError, zlib.error, EOFError, ConnectionError, TimeoutError)
 
-    distiller = Distiller(args.device, args.dtype, args.max_pixels)
+    distiller = Distiller(args.device, args.dtype, args.min_pixels, args.max_pixels)
     labelled = 0
+    max_cache_diff = 0.0
     t0 = time.time()
+
+    def label(record, img, err):
+        nonlocal max_cache_diff
+        if err is not None:
+            return error_output(record, err)
+        try:
+            result = distiller(img)
+        except FloatingPointError as e:
+            return error_output(record, f"inference: {e}")
+        if labelled + 1 <= GRID_LOG_IMAGES:
+            info = result["image"]
+            print(f"  {record['id']}: input {info['input_size'][0]}x{info['input_size'][1]} -> "
+                  f"grid_thw {info['grid_thw']} = model sees {info['model_size'][0]}x{info['model_size'][1]} px, "
+                  f"{info['visual_tokens']} visual tokens", flush=True)
+        if args.check_cache:
+            ref = distiller.reference(img)
+            diff = max(abs(result["answers"][q][0][k] - ref[q][0][k])
+                       for q in ref for k in ref[q][0])
+            max_cache_diff = max(max_cache_diff, diff)
+            print(f"  {record['id']}: cached vs full-prompt max |dp| = {diff:.4f}", flush=True)
+        return build_output(record, result)
 
     def flush(batch):
         """batch: [(state, record, image or None, decode error or None)]"""
         nonlocal labelled
-        good = [(s, r, img) for s, r, img, _ in batch if img is not None]
-        outputs = {}
-        if good:
-            try:
-                results = distiller([img for _, _, img in good])
-                for (s, r, _), res in zip(good, results):
-                    outputs[r["id"]] = (s, build_output(r, res))
-            except FloatingPointError:
-                # Retry one by one so a single bad image does not poison the batch.
-                for s, r, img in good:
-                    try:
-                        outputs[r["id"]] = (s, build_output(r, distiller([img])[0]))
-                    except FloatingPointError as e:
-                        outputs[r["id"]] = (s, error_output(r, f"inference: {e}"))
-        for s, r, _, err in batch:
-            if err is not None:
-                outputs[r["id"]] = (s, error_output(r, err))
+        outputs = []
+        for state, record, img, err in batch:
+            outputs.append((state, label(record, img, err)))
+            labelled += 1
         for state in states:
-            mine = [o for s, o in outputs.values() if s is state]
+            mine = [o for s, o in outputs if s is state]
             if mine:
                 state.commit(mine)
-        labelled += len(batch)
         rate = labelled / max(1e-9, time.time() - t0)
         print(f"  {labelled}/{budget} labelled ({rate:.2f} img/s)", flush=True)
 
     attempt = 0
     while labelled < budget and wanted:
         batch = []
+        committed = labelled
         try:
             for image_path, data in rvlcdip.iter_tar_images():
                 item = wanted.pop(image_path, None)
@@ -366,9 +537,10 @@ def main():
                 except Exception as e:  # corrupt TIFFs exist in RVL-CDIP
                     err = f"decode: {type(e).__name__}: {e}"
                 batch.append((state, record, img, err))
-                if len(batch) == args.batch_size or labelled + len(batch) >= budget:
+                if len(batch) == args.commit_every or committed + len(batch) >= budget:
                     flush(batch)
                     batch = []
+                    committed = labelled
                 if labelled >= budget:
                     break
             if batch:
@@ -376,6 +548,7 @@ def main():
             break
         except STREAM_ERRORS as e:
             # Uncommitted batch items go back to the queue; committed ones are in done.log.
+            labelled = committed
             for state, record, _, _ in batch:
                 wanted[record["image_path"]] = (state, record)
             attempt += 1
@@ -383,6 +556,8 @@ def main():
                 raise
             print(f"Stream error ({type(e).__name__}: {e}); restarting stream ({attempt}/{args.max_retries})")
 
+    if args.check_cache:
+        print(f"check-cache: largest cached vs full-prompt probability difference = {max_cache_diff:.4f}")
     for state in states:
         complete = state.finalize_if_complete()
         print(f"{state.paths['out']}: {len(state.done)}/{len(state.records)} done"
