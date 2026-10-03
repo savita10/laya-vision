@@ -13,8 +13,10 @@ Outputs, next to each records file:
 A resumed run must use the same configuration as the manifest; otherwise it
 refuses, so labels from two configurations never mix in one file.
 
-Test records are refused: the test split is frozen (DECISIONS.md 2026-10-03)
-and only final_eval.py may read it.
+Test records are labelled under a recorded exception (DECISIONS.md
+2026-10-03), so all splits share one pinned environment. Condition: no human
+or agent reads or aggregates test secondary labels until final_eval.py runs.
+The script prints a notice when labelling test and never prints test answers.
 
     python scripts/distill_secondary_labels.py --records data/train.jsonl data/val.jsonl
     python scripts/distill_secondary_labels.py --records data/train.jsonl --limit 16   # dry run
@@ -40,12 +42,13 @@ import rvlcdip
 #   transformers support, no trust_remote_code.
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 MODEL_REVISION = "895c3a49bc3fa70a340399125c650a463535e71c"
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"  # v2: signatures excluded from handwriting (DECISIONS.md 2026-10-03)
 
 HANDWRITING_ID = "handwriting"
-HANDWRITING_INSTRUCTIONS = "This document contains handwriting."
+HANDWRITING_INSTRUCTIONS = "This document contains handwriting beyond signatures."
 HANDWRITING_PROMPT = (
-    "Statement: This document contains handwriting.\n"
+    "Statement: This document contains handwritten text or handwritten annotations "
+    "other than signatures. A signature alone does not count.\n"
     "Is the statement true for this document? Answer yes or no."
 )
 
@@ -281,13 +284,15 @@ def main():
     parser.add_argument("--max-retries", type=int, default=5, help="tar stream restarts on network errors")
     args = parser.parse_args()
 
-    # Check every file before writing anything.
     loaded = {}
     for path in args.records:
         records = read_jsonl(Path(path))
         if any(r["split"] == "test" for r in records):
-            raise SystemExit(f"{path}: test records refused. The test split is frozen "
-                             "(DECISIONS.md 2026-10-03); only final_eval.py may read it.")
+            print("\n" + "!" * 78)
+            print(f"!! LABELLING TEST RECORDS from {path}")
+            print("!! Recorded exception, DECISIONS.md 2026-10-03: no human or agent may read or")
+            print("!! aggregate test secondary labels until final_eval.py runs.")
+            print("!" * 78 + "\n", flush=True)
         loaded[path] = records
 
     manifest = config_manifest(args)

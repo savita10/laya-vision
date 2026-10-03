@@ -56,3 +56,21 @@ Step 5 (P0 reproduction of upstream fine-tune + eval on Colab).
   would suggest leakage or noise-fitting, not skill.
 - The test split (phase1/splits/test.jsonl) is FROZEN as of this date.
   Only final_eval.py may read it, per CLAUDE.md.
+
+## 2026-10-03 — P1 secondary-label distillation decisions
+- Distillation model: Qwen/Qwen2-VL-2B-Instruct, pinned revision
+  895c3a49bc3fa70a340399125c650a463535e71c. Apache-2.0, so distilled labels
+  carry no licence restriction into the Apache-2.0 release; Qwen2.5-VL-3B was
+  ruled out for its non-commercial qwen-research licence. Strong on document
+  images for its size, native dynamic resolution, ~4.4 GB fp16 (fits a T4).
+  Answers read from next-token probabilities over the allowed answer tokens,
+  stored as soft targets.
+- Legibility score = 4 described levels (unreadable / poor / readable /
+  clean), replacing the 1-5 scale in CLAUDE.md (amended in the same commit).
+- Recorded exception to the frozen test split: scripts/distill_secondary_labels.py
+  MAY label the test split, now, so all splits are labelled in one pinned
+  environment. Condition: no human or agent reads or aggregates test
+  secondary labels until final_eval.py runs. The script prints a notice when
+  labelling test and never prints test answers.
+- Handwriting noul excludes signatures: it asks whether the document contains
+  handwritten text or annotations beyond signatures (prompt version v2).

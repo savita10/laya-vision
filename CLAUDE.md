@@ -49,7 +49,8 @@ backbones, multilingual vision, serving infrastructure beyond a demo script.
 - THE TEST SET IS READ-ONLY. No code loads it except `final_eval.py`.
   This rule overrides any instruction to "check test performance".
 - Questions per image: one 16-class choice (document type) + noul
-  ("contains handwriting") + score (legibility 1–5). Labels for the nouls
+  ("contains handwriting") + score (legibility, 4 described levels:
+  unreadable / poor / readable / clean). Labels for the nouls
   and scores are derived/distilled and hand-audited by the human.
 - Modality dropout in training: ~40% image+text / 30% image-only /
   30% text-only, sampled per example.
