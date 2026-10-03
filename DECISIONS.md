@@ -38,3 +38,21 @@ Step 5 (P0 reproduction of upstream fine-tune + eval on Colab).
   4 epochs — baseline for P3 budget planning.
 - Launcher notebook to be updated with session fixes (os.chdir rescue,
   absolute paths, Drive model dir, tee log) — then P0 fully archived.
+
+## 2026-10-03 — P1 hand-audit complete; test split frozen
+- 200 stratified train samples manually reviewed: 193 correct (96.5%),
+  4 mislabeled (2%), 3 unreadable/too unclear to judge (1.5%). Unclear
+  items are counted as their own category regardless of y/n marking in
+  the sheet.
+- Mislabel pattern: concentrated in structured business documents -
+  two items labelled "form", one "email", one "invoice" did not match
+  their content. Later per-class confusion involving form/email/invoice
+  should be read against this known label noise.
+- Noted probe for P4 calibration: rvl-train-196717 (class
+  "handwritten", illegible) - the model should show low confidence on
+  such inputs; illegible items overall ~1.5%.
+- Interpretation: ~3.5% effective ceiling context (noise + illegible)
+  for all accuracy numbers on this dataset; test accuracy above ~98%
+  would suggest leakage or noise-fitting, not skill.
+- The test split (phase1/splits/test.jsonl) is FROZEN as of this date.
+  Only final_eval.py may read it, per CLAUDE.md.
