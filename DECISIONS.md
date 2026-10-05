@@ -125,3 +125,25 @@ Based on the 16-image val experiments (prompt v3, transformers 4.49.0).
   v2 attempt.
 - No test secondary labels were produced, so the 2026-10-03 test-labelling
   exception was never used and lapses with this decision.
+
+## 2026-10-05 — Route A baseline design
+- Route A is the no-new-training baseline: Qwen2-VL-2B-Instruct (pinned
+  revision, transformers 4.49.0, native resolution) writes a neutral
+  layout/content description of the page; the description is the Laya
+  state (plain string); the EXISTING Gate-0 fine-tuned Laya checkpoint
+  answers the 16-class document-type choice zero-shot. No Route-A-specific
+  Laya is trained.
+- The description prompt (version a1) never mentions the 16 classes or
+  asks for a document type; otherwise Route A becomes a VLM classifier.
+  Greedy decoding, max 192 new tokens.
+- Fixed comparison set: stratified 2,000-image val subset, seed 11,
+  committed as splits/val_comparison_2000_seed11.json (ids, per-class
+  counts, sha256 of the val.jsonl drawn from). Laya-Vision is scored on
+  the same 2,000 ids, like-for-like. Majority-class floor on this set:
+  129/2000 = 0.0645 (invoice).
+- Reported (route_a_results.json): accuracy vs labels (decode errors count
+  as wrong), majority-class floor, per-class accuracy, latency p50/p95 for
+  the VLM and for Laya separately, GPU-seconds/image.
+- scripts/route_a.py: resumable (done.log), --limit; a 32-image benchmark
+  on the comparison set precedes the full run, and its images count
+  towards the run.
