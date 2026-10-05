@@ -250,6 +250,7 @@ class Distiller:
             MODEL_ID, revision=MODEL_REVISION, torch_dtype=torch_dtype, token=rvlcdip.hf_token(),
         ).to(device).eval()
         self.rope_index = self._find_rope_index()
+        self._last_position_logits_only()
 
         self.prefix_text, suffix_texts = self._split_prompts()
         self.full_texts = {q: self.prefix_text + s for q, s in suffix_texts.items()}
@@ -319,10 +320,18 @@ class Distiller:
         return out
 
     def _forward(self, **kwargs):
-        try:
-            return self.model(**kwargs, logits_to_keep=1)
-        except TypeError:  # older transformers without logits_to_keep
-            return self.model(**kwargs)
+        return self.model(**kwargs)
+
+    def _last_position_logits_only(self):
+        # Only logits[:, -1] are ever read. Qwen2-VL on transformers 4.49 has no
+        # logits_to_keep, so without this the prefix pass projects every prefix
+        # token (~1,300-1,600 at mid-res) onto the 152k vocabulary and discards
+        # it. The LM head is applied per position, so slicing its input to the
+        # last position leaves that position's logits unchanged.
+        def keep_last(module, args):
+            return (args[0][:, -1:, :],) + tuple(args[1:])
+
+        self.model.get_output_embeddings().register_forward_pre_hook(keep_last)
 
     def _answer_probs(self, qid, logits):
         probs = self.torch.softmax(logits.float(), dim=-1).cpu()
@@ -495,15 +504,21 @@ def main():
     labelled = 0
     max_cache_diff = 0.0
     t0 = time.time()
+    # Inference alone (the answer read-out copies to CPU, so the GPU is synced):
+    # separates model speed from time spent streaming the tar.
+    model_seconds, model_images = 0.0, 0
 
     def label(record, img, err):
-        nonlocal max_cache_diff
+        nonlocal max_cache_diff, model_seconds, model_images
         if err is not None:
             return error_output(record, err)
+        start = time.perf_counter()
         try:
             result = distiller(img)
         except FloatingPointError as e:
             return error_output(record, f"inference: {e}")
+        model_seconds += time.perf_counter() - start
+        model_images += 1
         if labelled + 1 <= GRID_LOG_IMAGES:
             info = result["image"]
             print(f"  {record['id']}: input {info['input_size'][0]}x{info['input_size'][1]} -> "
@@ -529,7 +544,9 @@ def main():
             if mine:
                 state.commit(mine)
         rate = labelled / max(1e-9, time.time() - t0)
-        print(f"  {labelled}/{budget} labelled ({rate:.2f} img/s)", flush=True)
+        model_rate = model_images / max(1e-9, model_seconds)
+        print(f"  {labelled}/{budget} labelled ({rate:.2f} img/s overall, {model_rate:.2f} img/s inference)",
+              flush=True)
 
     attempt = 0
     progress_at_error = labelled

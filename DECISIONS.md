@@ -97,3 +97,10 @@ Based on the 16-image val experiments (prompt v3, transformers 4.49.0).
   failures without a commit (reset on progress), with exponential backoff
   (10 s doubling, capped at 300 s). Previously 5 drops in total ended the
   run, too few for a full 60k pass.
+- Resolution stays mid-res: on the val set it ranks 5/6 handwritten pages
+  in the top 5 vs native's 2/6; the enlargement earns its cost on
+  mixed-composition pages.
+- Approved: skip the unused prefix logits. transformers 4.49 Qwen2-VL has
+  no logits_to_keep, so the prefix pass projected every prefix token onto
+  the vocabulary; a pre-hook on the LM head now keeps only the last
+  position. Label-neutral (per-position projection).
