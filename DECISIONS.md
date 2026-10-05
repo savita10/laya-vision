@@ -147,3 +147,16 @@ Based on the 16-image val experiments (prompt v3, transformers 4.49.0).
 - scripts/route_a.py: resumable (done.log), --limit; a 32-image benchmark
   on the comparison set precedes the full run, and its images count
   towards the run.
+
+## 2026-10-05 — Route A prompt a2; evidence location
+- Route A description prompt a2 replaces a1 (a1 was never run): "whether
+  the text is printed, typed or handwritten" becomes "how the text was
+  produced". Reason: "handwritten" is a class label, and no class name may
+  appear in the description prompt, or Route A leaks towards a VLM
+  classifier. The layout examples (columns, headings, tables, boxes,
+  lines, logos, pictures, charts) stay: they are features, not classes.
+  scripts/route_a.py now refuses to load if the prompt contains any class
+  name as a whole word.
+- Handwriting evidence (2026-10-05 entries) is stored at
+  /content/drive/MyDrive/laya-vision/phase1/: bench_midres.json,
+  bench_l4.json, exp_v3_*.

@@ -37,6 +37,7 @@ import argparse
 import hashlib
 import io
 import json
+import re
 import statistics
 import time
 from collections import Counter
@@ -51,15 +52,20 @@ COMPARISON_SEED = 11
 COMPARISON_N = 2000
 DEFAULT_COMPARISON_SET = REPO / "splits" / f"val_comparison_{COMPARISON_N}_seed{COMPARISON_SEED}.json"
 
-# a1: first Route A prompt. Neutral: asks for layout and content, never for a
-# document type, and names no class.
-PROMPT_VERSION = "a1"
+# Neutral: asks for layout and content, never for a document type, and names no class.
+# a1: first Route A prompt (never run).
+# a2: "whether the text is printed, typed or handwritten" -> "how the text was
+#     produced"; "handwritten" is a class label (DECISIONS.md 2026-10-05).
+PROMPT_VERSION = "a2"
 DESCRIBE_PROMPT = (
     "Describe this scanned page for someone who cannot see it. Cover its layout (for example "
-    "columns, headings, tables, boxes, lines, logos, pictures or charts), whether the text is "
-    "printed, typed or handwritten, and what the text is about, quoting any title or heading. "
+    "columns, headings, tables, boxes, lines, logos, pictures or charts), how the text was "
+    "produced, and what the text is about, quoting any title or heading. "
     "Describe only what is visible. Write plain prose, at most 120 words."
 )
+_leaked = [c for c in rvlcdip.CLASSES if re.search(rf"\b{re.escape(c)}\b", DESCRIBE_PROMPT, re.IGNORECASE)]
+if _leaked:
+    raise RuntimeError(f"DESCRIBE_PROMPT names class labels {_leaked}; Route A would become a VLM classifier.")
 MAX_NEW_TOKENS = 192  # ~120 words plus headroom; hitting the cap is counted in the results
 # Native resolution: the processor's own floor, and a cap above RVL-CDIP's
 # ~1000x754 scans, so pages are not resized (only rounded to 28 px).
