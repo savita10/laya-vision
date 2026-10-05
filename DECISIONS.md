@@ -104,3 +104,24 @@ Based on the 16-image val experiments (prompt v3, transformers 4.49.0).
   no logits_to_keep, so the prefix pass projected every prefix token onto
   the vocabulary; a pre-hook on the LM head now keeps only the last
   position. Label-neutral (per-position projection).
+
+## 2026-10-05 — Handwriting deprioritised for v1
+- Benchmark (scripts/bench_distill.py, PyTorch on an L4, mid-res, logit
+  skip active): 0.284 img/s; batched prefix passes run out of memory.
+  60k train images would take ~59 h.
+- Verdict: investigated thoroughly and marginal. Prompt v3 fixed the
+  yes-bias; mid-res ranks 5/6 handwritten val images in the top 5 but
+  does not separate them cleanly. The ceiling looks like 90-dpi scans
+  plus a 2B VLM. Not worth the GPU cost for a weak, non-reported
+  auxiliary.
+- Decision: no full or large-subset distillation. Handwriting is off the
+  Phase 1 critical path and deprioritised for v1; it may return in v2.
+  Document type (complete for all 60k from the converter) is v1's sole
+  labelled task. CLAUDE.md and DATASET_CARD.md updated in the same
+  commit.
+- The val experiment outputs (v3 native / mid-res runs, benchmark JSON)
+  are kept as evidence. scripts/distill_secondary_labels.py and
+  scripts/bench_distill.py stay in the repo as the starting point for a
+  v2 attempt.
+- No test secondary labels were produced, so the 2026-10-03 test-labelling
+  exception was never used and lapses with this decision.
