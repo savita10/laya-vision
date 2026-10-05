@@ -13,9 +13,9 @@ stream stops as soon as every requested image is found. load_dataset is not
 used: it rejects script-based datasets such as aharley/rvl_cdip.
 
 With --secondary <split>_secondary.jsonl, the sheet gains the distilled
-handwriting/legibility answers and blank columns to judge each (written as
+handwriting answer and a blank column to judge it (written as
 audit_sheet_secondary.csv / audit_sheet_ids_secondary.csv), and image names
-gain them too: <id>_<label_name>_hw<p_true>_leg<level>.png.
+gain it too: <id>_<label_name>_hw<p_true>.png.
 
 Re-runnable: images already in <out> are not fetched again (a plain-named
 copy from an earlier run is reused for the --secondary name), and an existing
@@ -44,7 +44,7 @@ def image_filename(record, secondary_row=None):
             name += "_ERROR"
         else:
             hw = secondary_row["questions"]["handwriting"]["probabilities"]["true"]
-            name += f"_hw{hw:.2f}_leg{secondary_row['questions']['legibility']['answer']}"
+            name += f"_hw{hw:.2f}"
     return name + ".png"
 
 
@@ -69,16 +69,13 @@ def load_secondary(paths):
 
 
 def secondary_cells(row):
-    """[handwriting, p_handwriting, handwriting_correct, legibility, legibility_correct]"""
+    """[handwriting, p_handwriting, handwriting_correct]"""
     if row is None:
-        return ["", "", "", "", ""]
+        return ["", "", ""]
     if row.get("questions") is None:
-        return [f"ERROR: {row.get('error', '')}", "", "", "", ""]
+        return [f"ERROR: {row.get('error', '')}", "", ""]
     hw = row["questions"]["handwriting"]
-    lg = row["questions"]["legibility"]
-    level = lg["criteria"][lg["answer"]].split(":")[0]
-    return [str(hw["answer"]).lower(), f"{hw['probabilities']['true']:.3f}", "",
-            f"{lg['answer']} ({level})", ""]
+    return [str(hw["answer"]).lower(), f"{hw['probabilities']['true']:.3f}", ""]
 
 
 def parse_ids(args):
@@ -135,8 +132,7 @@ def main():
         # Separate sheet, so a completed doc-type sheet is never touched.
         sheet = out / f"{sheet_stem}_secondary.csv"
         header = ["id", "label_name", "looks_correct",
-                  "handwriting", "p_handwriting", "handwriting_correct",
-                  "legibility", "legibility_correct", "notes"]
+                  "handwriting", "p_handwriting", "handwriting_correct", "notes"]
         missing = [r["id"] for r in sample if r["id"] not in secondary]
         if missing:
             print(f"Warning: {len(missing)} selected records have no secondary labels (blank in sheet), "

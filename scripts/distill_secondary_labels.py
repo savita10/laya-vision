@@ -1,8 +1,12 @@
-"""Distil the two secondary labels (handwriting noul, legibility score) with a small VLM.
+"""Distil the secondary label (handwriting noul) with a small VLM.
+
+The handwriting noul is a TRAIN-ONLY auxiliary soft label, not a reported
+evaluation metric. Legibility was dropped as degenerate (both DECISIONS.md
+2026-10-05).
 
 For every record in the given <split>.jsonl files, the image is fetched from
-the RVL-CDIP tar stream and the VLM answers three prompts: handwriting, its
-inverse ("is everything printed or typed?") and legibility. Answers are read
+the RVL-CDIP tar stream and the VLM answers two prompts: handwriting and its
+inverse ("is everything printed or typed?"). Answers are read
 from next-token probabilities over the allowed answer tokens (no free
 generation), so every output parses and carries a probability distribution
 usable as a soft training target. The handwriting p(true) is the mean of
@@ -10,7 +14,7 @@ p(yes) on the direct prompt and p(no) on the inverse one, which cancels the
 model's bias towards answering "yes".
 
 Each image is encoded once: the shared prefix (system turn + image) runs
-through the model a single time and its KV cache is reused for the three
+through the model a single time and its KV cache is reused for the two
 short question suffixes. --check-cache also scores every image with full,
 uncached prompts and prints the largest probability difference, to confirm
 the cached path matches.
@@ -18,7 +22,8 @@ the cached path matches.
 Outputs, in --out-dir (default: next to each records file):
   <split>_secondary.jsonl          one line per record (sorted by image_index once complete)
   <split>_secondary.done.log       ids whose output line is durably written (resume state)
-  <split>_secondary.manifest.json  model, revision, prompt version, prompts, dtype, pixel limits, ids
+  <split>_secondary.manifest.json  model, revision, transformers version, prompt version,
+                                   prompts, dtype, pixel limits, ids
 A resumed run must use the same configuration as the manifest; otherwise it
 refuses, so labels from two configurations (or prompt versions) never mix in
 one file.
@@ -28,11 +33,19 @@ Test records are labelled under a recorded exception (DECISIONS.md
 or agent reads or aggregates test secondary labels until final_eval.py runs.
 The script prints a notice when labelling test and never prints test answers.
 
+Pinned config (DECISIONS.md 2026-10-05): prompt v3, transformers 4.49.0 (any
+other installed version is refused), min/max pixels 1003520 / 1254400
+(mid-res, T4-safe) as the defaults.
+
+A network drop in the tar stream ("Connection broken") restarts the stream
+from the start after a backoff; committed images are skipped on the re-read.
+--max-retries bounds consecutive failures without progress: the count resets
+whenever a batch is committed, so a long run survives any number of isolated
+drops.
+
     python scripts/distill_secondary_labels.py --records data/train.jsonl data/val.jsonl
     python scripts/distill_secondary_labels.py --records data/val.jsonl --ids rvl-val-034620,... \\
-        --out-dir runs/v3_native --check-cache                      # fixed-set A/B
-    python scripts/distill_secondary_labels.py ... --min-pixels 1568000 --max-pixels 2007040 \\
-        --out-dir runs/v3_enlarged                                  # enlarged images
+        --out-dir runs/v3_check --check-cache                       # fixed-set check
 """
 
 import argparse
@@ -58,8 +71,14 @@ MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 MODEL_REVISION = "895c3a49bc3fa70a340399125c650a463535e71c"
 # v2: signatures excluded from handwriting (DECISIONS.md 2026-10-03).
 # v3: direct handwriting question with examples + inverse question for
-#     debiasing; legibility levels with observable anchors.
+#     debiasing. (Legibility dropped 2026-10-05; the handwriting prompts are
+#     unchanged, so the version stays v3.)
 PROMPT_VERSION = "v3"
+# The v3 val experiments ran on this version; pinned (DECISIONS.md 2026-10-05).
+TRANSFORMERS_VERSION = "4.49.0"
+# Mid-res pixel limits from the v3 val experiments: T4-safe, no OOM.
+DEFAULT_MIN_PIXELS = 1003520
+DEFAULT_MAX_PIXELS = 1254400
 
 HANDWRITING_ID = "handwriting"
 HANDWRITING_INSTRUCTIONS = "This document contains handwriting beyond signatures."
@@ -75,34 +94,17 @@ HANDWRITING_INVERSE_PROMPT = (
     "nothing written by hand? Answer yes or no."
 )
 
-LEGIBILITY_ID = "legibility"
-LEGIBILITY_INSTRUCTIONS = "How legible is this document?"
-LEGIBILITY_LEVELS = [
-    "unreadable: most of the text cannot be read at all",
-    "poor: many words are hard to make out because of fading, blur, noise or low resolution",
-    "readable: almost all text can be read, though the scan shows some noise, faintness or blur",
-    "clean: sharp, high-contrast text that is easy to read throughout",
-]
-LEGIBILITY_PROMPT = (
-    "Rate how easy the text on this scanned page is to read.\n"
-    + "".join(f"{i + 1} = {level}\n" for i, level in enumerate(LEGIBILITY_LEVELS))
-    + "Answer with the single digit 1, 2, 3 or 4."
-)
-
 PROMPTS = {
     HANDWRITING_ID: HANDWRITING_PROMPT,
     HANDWRITING_INVERSE_ID: HANDWRITING_INVERSE_PROMPT,
-    LEGIBILITY_ID: LEGIBILITY_PROMPT,
 }
 
 # Answer strings scored at the first generated position. Case variants are
 # summed so the model's capitalisation preference does not bias the answer.
 YES_NO_ANSWERS = {"false": ["no", "No"], "true": ["yes", "Yes"]}
-LEGIBILITY_ANSWERS = {str(i): [str(i + 1)] for i in range(len(LEGIBILITY_LEVELS))}
 ANSWERS = {
     HANDWRITING_ID: YES_NO_ANSWERS,
     HANDWRITING_INVERSE_ID: YES_NO_ANSWERS,
-    LEGIBILITY_ID: LEGIBILITY_ANSWERS,
 }
 
 VISION_END = "<|vision_end|>"
@@ -124,6 +126,7 @@ def config_manifest(args, ids):
     return {
         "model": MODEL_ID,
         "model_revision": MODEL_REVISION,
+        "transformers_version": TRANSFORMERS_VERSION,
         "prompt_version": PROMPT_VERSION,
         "dtype": args.dtype,
         "min_pixels": args.min_pixels,
@@ -135,11 +138,22 @@ def config_manifest(args, ids):
         "questions": {
             HANDWRITING_ID: {"type": "noul", "instructions": HANDWRITING_INSTRUCTIONS,
                              "prompt": HANDWRITING_PROMPT, "inverse_prompt": HANDWRITING_INVERSE_PROMPT,
-                             "combine": "mean(p_yes(prompt), p_no(inverse_prompt))"},
-            LEGIBILITY_ID: {"type": "score", "instructions": LEGIBILITY_INSTRUCTIONS,
-                            "criteria": LEGIBILITY_LEVELS, "prompt": LEGIBILITY_PROMPT},
+                             "combine": "mean(p_yes(prompt), p_no(inverse_prompt))",
+                             "use": "train-only auxiliary soft label; not an evaluation metric"},
         },
     }
+
+
+def check_transformers_version():
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        installed = version("transformers")
+    except PackageNotFoundError:
+        installed = None
+    if installed != TRANSFORMERS_VERSION:
+        raise SystemExit(f"transformers {installed} is installed; the pinned config needs "
+                         f"{TRANSFORMERS_VERSION} (pip install transformers=={TRANSFORMERS_VERSION}).")
 
 
 def fsync_append(path, lines):
@@ -369,7 +383,6 @@ def build_output(record, result):
     direct, direct_mass = answers[HANDWRITING_ID]
     inverse, inverse_mass = answers[HANDWRITING_INVERSE_ID]
     p_true = (direct["true"] + inverse["false"]) / 2
-    lg_probs, lg_mass = answers[LEGIBILITY_ID]
     return {
         "id": record["id"],
         "split": record["split"],
@@ -385,14 +398,6 @@ def build_output(record, result):
                 "components": {"direct_p_yes": direct["true"], "inverse_p_yes": inverse["true"]},
                 "answer_mass": {"direct": round(direct_mass, 6), "inverse": round(inverse_mass, 6)},
             },
-            LEGIBILITY_ID: {
-                "type": "score",
-                "instructions": LEGIBILITY_INSTRUCTIONS,
-                "criteria": LEGIBILITY_LEVELS,
-                "answer": int(max(lg_probs, key=lg_probs.get)),
-                "probabilities": lg_probs,
-                "answer_mass": round(lg_mass, 6),
-            },
         },
     }
 
@@ -403,7 +408,7 @@ def error_output(record, message):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Distil handwriting/legibility labels with a VLM")
+    parser = argparse.ArgumentParser(description="Distil the handwriting auxiliary label with a VLM")
     parser.add_argument("--records", nargs="+", required=True, help="<split>.jsonl files")
     parser.add_argument("--ids", default=None, help="comma-separated record ids: label only these")
     parser.add_argument("--out-dir", default=None, help="output folder (default: next to each records file)")
@@ -412,14 +417,16 @@ def main():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", choices=["fp16", "bf16", "fp32"], default="fp16",
                         help="fp16 on T4 (no native bf16)")
-    parser.add_argument("--min-pixels", type=int, default=None,
-                        help="Qwen2-VL resize floor; smaller images are enlarged (default: processor's own)")
-    parser.add_argument("--max-pixels", type=int, default=1024 * 28 * 28,
+    parser.add_argument("--min-pixels", type=int, default=DEFAULT_MIN_PIXELS,
+                        help="Qwen2-VL resize floor; smaller images are enlarged")
+    parser.add_argument("--max-pixels", type=int, default=DEFAULT_MAX_PIXELS,
                         help="Qwen2-VL resize cap; ~1 visual token per 28x28 px")
     parser.add_argument("--check-cache", action="store_true",
                         help="also score each image with full uncached prompts and print the max difference")
-    parser.add_argument("--max-retries", type=int, default=5, help="tar stream restarts on network errors")
+    parser.add_argument("--max-retries", type=int, default=5,
+                        help="consecutive tar stream restarts without progress before giving up")
     args = parser.parse_args()
+    check_transformers_version()
     if args.min_pixels is not None and args.min_pixels > args.max_pixels:
         raise SystemExit("--min-pixels must not exceed --max-pixels.")
 
@@ -470,6 +477,7 @@ def main():
             state.finalize_if_complete()
         return
 
+    import http.client
     import tarfile
     import zlib
 
@@ -478,7 +486,9 @@ def main():
     from PIL import Image
 
     # Network/archive failures that a stream restart can recover from.
-    STREAM_ERRORS = (requests.RequestException, urllib3.exceptions.HTTPError,
+    # "Connection broken: IncompleteRead" surfaces as urllib3 ProtocolError (an HTTPError);
+    # http.client errors are listed in case one escapes unwrapped.
+    STREAM_ERRORS = (requests.RequestException, urllib3.exceptions.HTTPError, http.client.HTTPException,
                      tarfile.TarError, zlib.error, EOFError, ConnectionError, TimeoutError)
 
     distiller = Distiller(args.device, args.dtype, args.min_pixels, args.max_pixels)
@@ -522,6 +532,7 @@ def main():
         print(f"  {labelled}/{budget} labelled ({rate:.2f} img/s)", flush=True)
 
     attempt = 0
+    progress_at_error = labelled
     while labelled < budget and wanted:
         batch = []
         committed = labelled
@@ -551,10 +562,17 @@ def main():
             labelled = committed
             for state, record, _, _ in batch:
                 wanted[record["image_path"]] = (state, record)
+            # Only consecutive failures without a commit in between count towards the limit.
+            if labelled > progress_at_error:
+                attempt = 0
+            progress_at_error = labelled
             attempt += 1
             if attempt > args.max_retries:
                 raise
-            print(f"Stream error ({type(e).__name__}: {e}); restarting stream ({attempt}/{args.max_retries})")
+            delay = min(300, 10 * 2 ** (attempt - 1))
+            print(f"Stream error ({type(e).__name__}: {e}); restarting stream in {delay}s "
+                  f"({attempt}/{args.max_retries} without progress)", flush=True)
+            time.sleep(delay)
 
     if args.check_cache:
         print(f"check-cache: largest cached vs full-prompt probability difference = {max_cache_diff:.4f}")

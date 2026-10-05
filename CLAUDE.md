@@ -48,10 +48,10 @@ backbones, multilingual vision, serving infrastructure beyond a demo script.
   5k val / 5k test.
 - THE TEST SET IS READ-ONLY. No code loads it except `final_eval.py`.
   This rule overrides any instruction to "check test performance".
-- Questions per image: one 16-class choice (document type) + noul
-  ("contains handwriting") + score (legibility, 4 described levels:
-  unreadable / poor / readable / clean). Labels for the nouls
-  and scores are derived/distilled and hand-audited by the human.
+- Questions per image: one 16-class choice (document type, the primary
+  labelled task) + noul ("contains handwriting"). The handwriting noul is
+  a distilled, TRAIN-ONLY auxiliary soft label, not a reported evaluation
+  metric. Legibility score dropped as degenerate (DECISIONS.md 2026-10-05).
 - Modality dropout in training: ~40% image+text / 30% image-only /
   30% text-only, sampled per example.
 

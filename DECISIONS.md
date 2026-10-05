@@ -74,3 +74,26 @@ Step 5 (P0 reproduction of upstream fine-tune + eval on Colab).
   labelling test and never prints test answers.
 - Handwriting noul excludes signatures: it asks whether the document contains
   handwritten text or annotations beyond signatures (prompt version v2).
+
+## 2026-10-05 — P1 secondary labels settled
+Based on the 16-image val experiments (prompt v3, transformers 4.49.0).
+- Handwriting noul: ranks handwriting (5 of 6 handwritten val images in the
+  top 5 at mid-res) but does not cleanly separate it: 4 of 6 score
+  0.27-0.40, overlapping the clean pack. Kept as a TRAIN-ONLY auxiliary
+  soft label; NOT a reported evaluation metric.
+- Legibility score: DROPPED. Degenerate distribution (14/16 level 2,
+  2/16 level 1, none at 0 or 3; probabilities 0.34-0.60, no
+  discrimination), so a near-constant label adds no training signal.
+  Removed from the distillation output and the question set (CLAUDE.md
+  amended in the same commit). If legibility is wanted later, compute a
+  deterministic sharpness/contrast proxy, not a VLM label.
+- Pinned distillation config, recorded in every manifest:
+  Qwen/Qwen2-VL-2B-Instruct @ 895c3a4, prompt v3, transformers 4.49.0
+  (the script refuses any other installed version), fp16,
+  --min-pixels 1003520 --max-pixels 1254400 (mid-res, T4-safe, no OOM;
+  now the script defaults).
+- Document-type choice remains the primary labelled task.
+- Tar-stream retry: the --max-retries budget now counts consecutive
+  failures without a commit (reset on progress), with exponential backoff
+  (10 s doubling, capped at 300 s). Previously 5 drops in total ended the
+  run, too few for a full 60k pass.
