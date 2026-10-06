@@ -160,3 +160,22 @@ Based on the 16-image val experiments (prompt v3, transformers 4.49.0).
 - Handwriting evidence (2026-10-05 entries) is stored at
   /content/drive/MyDrive/laya-vision/phase1/: bench_midres.json,
   bench_l4.json, exp_v3_*.
+
+## 2026-10-06 — Route A 32-image benchmark (prompt a2)
+- 32 comparison-set images (they count towards the full run): accuracy
+  0.625 (20/32; small sample, wide uncertainty; majority-class floor
+  0.0645). VLM p50 7.6 s, Laya p50 42 ms; 0.131 img/s; 4.2 h projected
+  for the 2,000-image set (inference only).
+- 8/32 descriptions hit the 192-token cap. Accepted for v1: the
+  description is truncated, not dropped, and the count is reported in
+  route_a_results.json. Read Route A accuracy with this in mind.
+- Stream errors recurred about every 8 images, matching --commit-every 8.
+  Cause: the tar was read only between images, so the connection sat idle
+  for ~60 s per 8-image commit and the server dropped it; each retry
+  re-read the gzip tar from the start. Resuming inside the tar is not
+  practical (gzip cannot seek; it would need decompressor checkpoints plus
+  HTTP Range requests). Fix instead: scripts/route_a.py reads the stream
+  in a background thread, so the connection never idles, and holds only
+  the wanted images (~200 MB for 2,000). A real network drop still
+  restarts from the start, but costs download time only, not GPU time.
+  The deprioritised distillation script keeps the old inline reader.
