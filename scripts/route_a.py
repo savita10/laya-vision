@@ -37,8 +37,10 @@ import argparse
 import hashlib
 import io
 import json
+import queue
 import re
 import statistics
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -469,38 +471,76 @@ def run(args, wanted, budget, outputs):
                   f"({last['description_tokens']} tokens), Laya {1000 * last['laya_seconds']:.0f} ms, "
                   f"{last['laya']['choice']!r} vs {last['label_name']!r}", flush=True)
 
-    attempt, progress_at_error = 0, processed
-    while processed < budget and wanted:
-        batch = []
-        try:
-            for image_path, data in rvlcdip.iter_tar_images():
-                record = wanted.pop(image_path, None)
-                if record is None:
-                    continue
-                batch.append((record, data))
-                if len(batch) == args.commit_every or processed + len(batch) >= budget:
+    images = queue.Queue()
+    stop = threading.Event()
+    reader = threading.Thread(target=read_stream, args=(wanted, budget, images, stop, STREAM_ERRORS, args.max_retries),
+                              daemon=True)
+    reader.start()
+    batch = []
+    try:
+        while processed + len(batch) < budget:
+            item = images.get()
+            if item is None:  # stream finished
+                break
+            if isinstance(item, BaseException):
+                if batch:
                     flush(batch)
-                    batch = []
-                if processed >= budget:
-                    break
-            if batch:
+                raise item
+            batch.append(item)
+            if len(batch) == args.commit_every:
                 flush(batch)
-            break
-        except STREAM_ERRORS as e:
-            # Uncommitted items go back to the queue; committed ones are in done.log.
-            for record, _ in batch:
-                wanted[record["image_path"]] = record
-            if processed > progress_at_error:
-                attempt = 0
-            progress_at_error = processed
-            attempt += 1
-            if attempt > args.max_retries:
-                raise
-            delay = min(300, 10 * 2 ** (attempt - 1))
-            print(f"Stream error ({type(e).__name__}: {e}); restarting stream in {delay}s "
-                  f"({attempt}/{args.max_retries} without progress)", flush=True)
-            time.sleep(delay)
+                batch = []
+        if batch:
+            flush(batch)
+    finally:
+        stop.set()
 
+
+def read_stream(wanted, budget, images, stop, stream_errors, max_retries):
+    """Background reader: drain the tar stream into `images` as fast as the network allows.
+
+    Inference takes seconds per image; reading the stream only between images
+    left the connection idle for ~60 s per 8-image commit, and the server
+    dropped it ("Connection broken") about every 8 images. Here the stream is
+    read continuously, and only wanted images are held (RVL-CDIP TIFFs are
+    ~100 KB, so the 2,000-image set is ~200 MB). A real network drop restarts
+    the stream from the start (gzip cannot seek) after a backoff, skipping
+    images already queued; it costs download time only, not GPU time.
+    Puts (record, bytes) items, then None at the end, or the exception if
+    retries run out.
+    """
+    wanted = dict(wanted)
+    queued = 0
+    attempt, progress_at_error = 0, 0
+    try:
+        while queued < budget and wanted and not stop.is_set():
+            try:
+                for image_path, data in rvlcdip.iter_tar_images():
+                    if stop.is_set():
+                        return
+                    record = wanted.pop(image_path, None)
+                    if record is None:
+                        continue
+                    images.put((record, data))
+                    queued += 1
+                    if queued >= budget:
+                        break
+                break
+            except stream_errors as e:
+                if queued > progress_at_error:
+                    attempt = 0
+                progress_at_error = queued
+                attempt += 1
+                if attempt > max_retries:
+                    raise
+                delay = min(300, 10 * 2 ** (attempt - 1))
+                print(f"Stream error ({type(e).__name__}: {e}); restarting stream in {delay}s "
+                      f"({attempt}/{max_retries} without progress; {queued} images queued so far)", flush=True)
+                if stop.wait(delay):
+                    return
+        images.put(None)
+    except BaseException as e:  # hand any failure to the main thread
+        images.put(e)
 
 if __name__ == "__main__":
     main()
