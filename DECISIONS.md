@@ -179,3 +179,42 @@ Based on the 16-image val experiments (prompt v3, transformers 4.49.0).
   the wanted images (~200 MB for 2,000). A real network drop still
   restarts from the start, but costs download time only, not GPU time.
   The deprioritised distillation script keeps the old inline reader.
+
+## 2026-10-06 — Route A baseline result (fixed)
+- Full run on the 2,000-image comparison set (prompt a2, code 7d64b5d):
+  2000/2000, 0 errors. Accuracy 0.501 vs majority-class floor 0.0645.
+  VLM p50 7.5 s, Laya p50 41 ms, 7.6 GPU-seconds/image. 590/2000
+  descriptions (29.5%) hit the 192-token cap (accepted for v1, 2026-10-06).
+- This is the fixed Route A baseline: Laya-Vision must beat 0.501 on the
+  same 2,000 ids (splits/val_comparison_2000_seed11.json), and the
+  success criterion compares cost against Route A's 7.6 GPU-s/image.
+- Observed confusion neighbourhoods: letter / email / memo,
+  form / questionnaire, scientific report / scientific publication.
+  These classes differ mainly in layout and visual structure (letterheads,
+  header blocks, form grids, column and title styles) that a text
+  description flattens or drops. That motivates the visual channel:
+  Laya-Vision should gain most on these pairs, so P3/P4 should report
+  per-class and per-neighbourhood accuracy against Route A, not only
+  overall accuracy.
+
+## 2026-10-06 — Gate 1: PASSED — Phase 1 closed
+Gate: dataset card + baseline table. Conditions met:
+- Converter: scripts/build_dataset.py, deterministic (seed 20261003,
+  pinned dataset revision), 60k / 5k / 5k stratified, splits_manifest.json
+  with source hashes.
+- Splits frozen: test frozen 2026-10-03, read only by final_eval.py. No
+  test labels or test outputs were produced in Phase 1 (the secondary-
+  label test exception lapsed unused).
+- Hand audit: 200 stratified train samples; 96.5% correct, 2%
+  mislabelled, 1.5% unclear; ~3.5% effective ceiling noted.
+- Labelled task settled: document type is v1's sole task; handwriting
+  deferred to v2, legibility dropped (2026-10-05).
+- Fixed comparison set: splits/val_comparison_2000_seed11.json.
+- Baseline table (val comparison set, 2,000):
+  | Baseline       | Accuracy | Latency p50             | GPU-s/image |
+  | Majority class | 0.0645   | -                       | -           |
+  | Route A        | 0.501    | VLM 7.5 s + Laya 41 ms  | 7.6         |
+- Dataset card: DATASET_CARD.md finalised (sources, licence/terms,
+  splits, seed, audit noise, v1 task, deferred labels, baselines,
+  limitations).
+Next: Phase 2, precompute (SigLIP embeddings + full-resolution OCR).
