@@ -1,0 +1,149 @@
+{
+  "complete": true,
+  "n_comparison_set": 2000,
+  "n_done": 2000,
+  "n_errors": 0,
+  "errors": [],
+  "accuracy": 0.501,
+  "correct": 1002,
+  "majority_class_floor": {
+    "class": "invoice",
+    "accuracy": 0.0645
+  },
+  "per_class_accuracy": {
+    "letter": {
+      "n": 122,
+      "accuracy": 0.6967213114754098
+    },
+    "form": {
+      "n": 127,
+      "accuracy": 0.3937007874015748
+    },
+    "email": {
+      "n": 126,
+      "accuracy": 0.5793650793650794
+    },
+    "handwritten": {
+      "n": 122,
+      "accuracy": 0.319672131147541
+    },
+    "advertisement": {
+      "n": 126,
+      "accuracy": 0.6666666666666666
+    },
+    "scientific report": {
+      "n": 125,
+      "accuracy": 0.632
+    },
+    "scientific publication": {
+      "n": 126,
+      "accuracy": 0.8492063492063492
+    },
+    "specification": {
+      "n": 126,
+      "accuracy": 0.8809523809523809
+    },
+    "file folder": {
+      "n": 122,
+      "accuracy": 0.03278688524590164
+    },
+    "news article": {
+      "n": 126,
+      "accuracy": 0.5952380952380952
+    },
+    "budget": {
+      "n": 125,
+      "accuracy": 0.224
+    },
+    "invoice": {
+      "n": 129,
+      "accuracy": 0.6821705426356589
+    },
+    "presentation": {
+      "n": 124,
+      "accuracy": 0.13709677419354838
+    },
+    "questionnaire": {
+      "n": 126,
+      "accuracy": 0.4444444444444444
+    },
+    "resume": {
+      "n": 121,
+      "accuracy": 0.4462809917355372
+    },
+    "memo": {
+      "n": 127,
+      "accuracy": 0.4094488188976378
+    }
+  },
+  "latency": {
+    "vlm": {
+      "p50_ms": 7506.066738999834,
+      "p95_ms": 9322.697731699964,
+      "mean_ms": 7553.697227494489
+    },
+    "laya": {
+      "p50_ms": 41.26209500009281,
+      "p95_ms": 43.49291005028135,
+      "mean_ms": 41.96691070250711
+    },
+    "total": {
+      "p50_ms": 7547.539255000629,
+      "p95_ms": 9365.001125749677,
+      "mean_ms": 7595.664138196997
+    }
+  },
+  "gpu_seconds_per_image": {
+    "vlm": 7.55369722749449,
+    "laya": 0.041966910702507104,
+    "total": 7.595664138196996
+  },
+  "img_per_s": 0.1316540570785918,
+  "projected_hours_full_set": 4.219813410109443,
+  "description_tokens": {
+    "mean": 145.9965,
+    "hit_max_new_tokens": 590
+  },
+  "laya_state_truncated": 0,
+  "gpus": [
+    "NVIDIA L4"
+  ],
+  "config": {
+    "vlm": "Qwen/Qwen2-VL-2B-Instruct",
+    "vlm_revision": "895c3a49bc3fa70a340399125c650a463535e71c",
+    "transformers_version": "4.49.0",
+    "prompt_version": "a2",
+    "prompt": "Describe this scanned page for someone who cannot see it. Cover its layout (for example columns, headings, tables, boxes, lines, logos, pictures or charts), how the text was produced, and what the text is about, quoting any title or heading. Describe only what is visible. Write plain prose, at most 120 words.",
+    "decoding": {
+      "do_sample": false,
+      "max_new_tokens": 192
+    },
+    "min_pixels": 3136,
+    "max_pixels": 802816,
+    "dtype": "fp16",
+    "laya_version": "0.3.28",
+    "laya_checkpoint_sha256": {
+      "checkpoint_latest/checkpoint_meta.json": "e19b3744fd4cba8f339cdde52bf44203c26cead4cb598e92b5edd36f22bf68b6",
+      "checkpoint_latest/encoder/config.json": "5268d24ad3b77c8151de5dcb0762ba4391619aad9ab0bda33e36fb083cfeae6d",
+      "checkpoint_latest/model.safetensors": "a09146734c150280e74c9264b94ccb55085ed603687b45580e0390c48cbf1f5f",
+      "checkpoint_latest/rl_agent_config.json": "bbd3d5900370293b28f9fba66dba9cf3cf31179d0206564eb1f4c83fbdbd6fd5",
+      "checkpoint_latest/tokenizer/tokenizer.json": "6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30",
+      "checkpoint_latest/tokenizer/tokenizer_config.json": "5926e6ec4294f80294bd98d9176defa9fbae7f140525d06a1da987488e74a973",
+      "checkpoint_meta.json": "dab5d9eee4c56dd882c1a1f1b9e3555c858ca46d4a70be5420254dac28bd8a97",
+      "encoder/config.json": "5268d24ad3b77c8151de5dcb0762ba4391619aad9ab0bda33e36fb083cfeae6d",
+      "model.safetensors": "a09146734c150280e74c9264b94ccb55085ed603687b45580e0390c48cbf1f5f",
+      "rl_agent_config.json": "bbd3d5900370293b28f9fba66dba9cf3cf31179d0206564eb1f4c83fbdbd6fd5",
+      "tokenizer/tokenizer.json": "6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30",
+      "tokenizer/tokenizer_config.json": "08d4cf3ac4dca381759441b85b91a6d40e688471dcd33d15d6649eb0a9a854d1"
+    },
+    "state": "description text (plain string)",
+    "question": "doc_type",
+    "comparison_set": {
+      "seed": 11,
+      "n": 2000,
+      "source_sha256": "41a8794987a1c6611596e9761806be57c4dabccadcdd8c990b4c26e0b4ef8408"
+    },
+    "dataset": "aharley/rvl_cdip",
+    "dataset_revision": "03f14a4ad0a32413eff51ca10f9f511545f2bd5b"
+  }
+}
