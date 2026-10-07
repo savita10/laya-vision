@@ -236,3 +236,33 @@ Conditions:
   nn_sanity_check.py refuse any split but val; training and calibration
   code must not load test shards.
 - final_eval.py remains the only code that reads test labels.
+
+## 2026-10-07 — P2 precompute decisions
+1. OCR engine: Tesseract on CPU, LSTM, `--oem 1 --psm 3`, lang eng, run on
+   the original full-resolution scan. Reasons: built for printed document
+   pages (RVL-CDIP is ~90 dpi printed business documents); the OCR used for
+   RVL-CDIP in the literature (e.g. LayoutLM), so the text channel is
+   comparable; deterministic for a fixed version; CPU-only, so it runs
+   beside the GPU embedding pass. Manifest records the Tesseract version,
+   pytesseract version, eng.traineddata sha256 and config. EasyOCR stays
+   available only for the benchmark.
+2. Preprocessing p2v1: convert to RGB; ImageOps.autocontrast, 1% cutoff,
+   tone-preserving, on the full page; bicubic resize of the long side to
+   384, aspect preserved; centre pad to 384x384 with white (padding reads
+   as page margin, not an artificial edge); SigLIP normalisation
+   (x/255 - 0.5) / 0.5.
+3. The 32-token view is an 8 rows x 4 cols grid (3x6 patches per token,
+   row-major); pages are portrait.
+4. Embeddings are STORED at 64 tokens (8x8 over the 24x24 patch grid,
+   3x3 patches per token), fp16. The 32 (8x4), 16 (4x4) and 8 (4x2)
+   views are derived at load time by block-averaging the stored grid
+   (scripts/shards.py). Equal-size blocks make this exactly the direct
+   average pool, up to fp16 rounding of the stored values; checked on
+   random data (max abs diff vs a direct fp32 pool: 2.4e-7 from fp32
+   storage, 3.5e-4 from fp16 storage). precompute.py's --pool-grid
+   default is 8x8. CLAUDE.md amended in the same commit.
+5. CLAUDE.md test rule amended to: "No code loads test LABELS except
+   final_eval.py; image-only transforms are permitted under exceptions
+   recorded in DECISIONS.md." The precompute exception above is the
+   first under this wording. shards.load_split refuses the test split
+   unless called with allow_test=True, which only final_eval.py may pass.

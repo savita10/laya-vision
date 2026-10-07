@@ -46,8 +46,9 @@ backbones, multilingual vision, serving infrastructure beyond a demo script.
 ## Data
 - Dataset: RVL-CDIP from Hugging Face. Stratified subsample: 60k train /
   5k val / 5k test.
-- THE TEST SET IS READ-ONLY. No code loads it except `final_eval.py`.
-  This rule overrides any instruction to "check test performance".
+- THE TEST SET IS READ-ONLY. No code loads test LABELS except
+  `final_eval.py`; image-only transforms are permitted under exceptions
+  recorded in DECISIONS.md. This rule overrides any instruction to "check test performance".
 - Questions per image (v1): one 16-class choice (document type), the sole
   labelled task. The handwriting noul was investigated and deprioritised
   for v1 (marginal signal, ~59h to distil 60k on an L4); may return in v2.
@@ -60,7 +61,8 @@ backbones, multilingual vision, serving infrastructure beyond a demo script.
   384x384, contrast normalisation only. No deskew/denoise in v1.
 - OCR runs on the ORIGINAL full-resolution image, before any resize.
   One OCR engine chosen once (record engine + version in the shard manifest).
-- Embeddings stored fp16, pooled to 32 tokens, sharded ~2,000 images/shard,
+- Embeddings stored fp16 at 64 tokens (8x8), 32/16/8 derived exactly
+  at load time (scripts/shards.py), sharded ~2,000 images/shard,
   each shard with a manifest.json recording the preprocessing version.
 
 ## Engineering rules (non-negotiable)

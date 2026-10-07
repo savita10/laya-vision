@@ -10,7 +10,9 @@ through two independent passes:
   embed  Preprocessing PREPROCESS_VERSION (RGB -> contrast normalisation ->
          letterbox to 384x384), then frozen SigLIP base-384, last hidden state
          (24x24 patch grid, post-layernorm), average-pooled to a fixed grid
-         (default 8 rows x 4 cols = 32 tokens, row-major), stored fp16.
+         (default 8x8 = 64 tokens, row-major), stored fp16. The 32/16/8-token
+         views are derived exactly at load time (shards.py; DECISIONS.md
+         2026-10-07).
 
 Output, in --out-dir/<split>/:
   run_config.json          identity of this output: split, records sha256, shard
@@ -73,6 +75,7 @@ REPO = Path(__file__).resolve().parent.parent
 # p2v1: RGB -> autocontrast (cutoff 1%, tone-preserving) -> bicubic resize of the
 # long side to 384 -> centre pad with white to 384x384. Never change in place:
 # a new version gets a new id and a new output directory (CLAUDE.md).
+# Approved DECISIONS.md 2026-10-07.
 PREPROCESS_VERSION = "p2v1"
 IMAGE_SIZE = 384
 CONTRAST_CUTOFF_PERCENT = 1
@@ -90,12 +93,12 @@ PREPROCESS_SPEC = {
 
 SIGLIP_ID = "google/siglip-base-patch16-384"
 SIGLIP_REVISION = "41aec1c83b32e0a6fca20ad88ba058aa5b5ea394"
-DEFAULT_POOL_GRID = "8x4"  # rows x cols over the 24x24 patch grid -> 32 tokens
+DEFAULT_POOL_GRID = "8x8"  # rows x cols over the 24x24 patch grid -> 64 stored tokens (DECISIONS.md 2026-10-07)
 
 DEFAULT_SHARD_SIZE = 2000
 LOCK_STALE_SECONDS = 600
 
-# OCR engine choice (default tesseract; DECISIONS.md once confirmed):
+# OCR engine choice (default tesseract; approved DECISIONS.md 2026-10-07):
 # - RVL-CDIP is low-resolution (~90 dpi) printed business documents; Tesseract's
 #   LSTM engine is built for printed document pages, and it is the OCR used for
 #   RVL-CDIP in the document-AI literature (e.g. LayoutLM), so our text channel
@@ -572,7 +575,7 @@ def main():
     parser.add_argument("--skip-ocr", action="store_true", help="embeddings only")
     parser.add_argument("--skip-embed", action="store_true", help="OCR only")
     parser.add_argument("--shard-size", type=int, default=DEFAULT_SHARD_SIZE)
-    parser.add_argument("--pool-grid", default=DEFAULT_POOL_GRID, help="rows x cols, e.g. 8x4 = 32 tokens")
+    parser.add_argument("--pool-grid", default=DEFAULT_POOL_GRID, help="stored grid, rows x cols (default 8x8 = 64 tokens)")
     parser.add_argument("--spool-dir", default=None,
                         help="local disk for streamed images (default: /content/rvl_spool on Colab, else temp)")
     parser.add_argument("--clean-spool", action="store_true", help="delete a shard's spooled images once done")

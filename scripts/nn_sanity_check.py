@@ -12,7 +12,8 @@ shares). Two representations are scored:
 It also counts near-duplicate pairs (cosine >= --dup-threshold) and how many
 cross classes; RVL-CDIP is known to contain duplicates.
 
-Val only: refuses any other split.
+Scores the --tokens view (default 32) derived from the stored 8x8 grid
+(shards.py). Val only: refuses any other split.
 
     python scripts/nn_sanity_check.py --shards <out-dir>/val --records data/rvl_v1/val.jsonl
 """
@@ -25,38 +26,7 @@ from pathlib import Path
 import numpy as np
 
 import rvlcdip
-
-
-def load_shards(split_dir, allow_partial):
-    with open(split_dir / "run_config.json", encoding="utf-8") as f:
-        config = json.load(f)
-    if config["identity"]["split"] != "val":
-        raise SystemExit(f"{split_dir} holds split {config['identity']['split']!r}; this check runs on val only.")
-    if "embed" not in config["passes"]:
-        raise SystemExit(f"{split_dir}: no embed pass recorded.")
-    done = set()
-    if (split_dir / "done.log").exists():
-        done = {tuple(line.split()) for line in (split_dir / "done.log").read_text(encoding="utf-8").splitlines()
-                if line.strip()}
-    shards = sorted(p for p in split_dir.glob("shard_*") if p.is_dir())
-    complete = [p for p in shards if ("embed", p.name) in done]
-    if len(complete) != len(shards) or not shards:
-        msg = f"{split_dir}: embed done for {len(complete)}/{len(shards)} shards"
-        if not allow_partial or not complete:
-            raise SystemExit(msg + "; finish the run or pass --allow-partial.")
-        print("WARNING: " + msg, flush=True)
-    ids, embs = [], []
-    for p in complete:
-        with open(p / "manifest.json", encoding="utf-8") as f:
-            manifest = json.load(f)
-        emb = np.load(p / "embeddings.npy")
-        valid = manifest["passes"]["embed"]["valid"]
-        if emb.shape[0] != len(manifest["ids"]) or len(valid) != len(manifest["ids"]):
-            raise SystemExit(f"{p}: embeddings / manifest length mismatch")
-        keep = [i for i, v in enumerate(valid) if v]
-        ids.extend(manifest["ids"][i] for i in keep)
-        embs.append(emb[keep])
-    return config, ids, np.concatenate(embs).astype(np.float32)
+import shards
 
 
 def neighbours(x, k, chunk=1024):
@@ -106,6 +76,8 @@ def main():
     parser.add_argument("--records", required=True, help="val.jsonl (labels)")
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--dup-threshold", type=float, default=0.995)
+    parser.add_argument("--tokens", type=int, choices=sorted(shards.TOKEN_VIEWS), default=32,
+                        help="token view derived from the stored 8x8 grid")
     parser.add_argument("--allow-partial", action="store_true", help="score only the shards that are done")
     parser.add_argument("--out", default=None, help="write results JSON here")
     args = parser.parse_args()
@@ -120,16 +92,19 @@ def main():
     if splits != {"val"}:
         raise SystemExit("--records must be val.jsonl; this check runs on val only.")
 
-    config, ids, emb = load_shards(Path(args.shards), args.allow_partial)
+    config, ids, emb = shards.load_split(Path(args.shards), args.tokens, args.allow_partial)
+    if config["identity"]["split"] != "val":
+        raise SystemExit(f"{args.shards} holds split {config['identity']['split']!r}; this check runs on val only.")
     labels = np.array([labels_by_id[i] for i in ids])
     shares = np.bincount(labels, minlength=len(rvlcdip.CLASSES)) / len(labels)
     chance = float((shares ** 2).sum())
     print(f"{len(ids)} val images, embeddings {emb.shape[1:]} "
-          f"(pooling {config['passes']['embed']['siglip']['pooling']['grid_rows_cols']}), "
+          f"({args.tokens}-token view {shards.TOKEN_VIEWS[args.tokens]} of stored "
+          f"{config['passes']['embed']['siglip']['pooling']['grid_rows_cols']}), "
           f"chance agreement {chance:.4f}\n")
 
     reps = {"mean": emb.mean(axis=1), "flat": emb.reshape(len(emb), -1)}
-    results = {"n": len(ids), "k": args.k, "chance_agreement": chance,
+    results = {"n": len(ids), "k": args.k, "tokens": args.tokens, "chance_agreement": chance,
                "embed_config": config["passes"]["embed"], "representations": {}}
     for name, x in reps.items():
         idx, sims = neighbours(x, args.k)
