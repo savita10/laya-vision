@@ -218,3 +218,21 @@ Gate: dataset card + baseline table. Conditions met:
   splits, seed, audit noise, v1 task, deferred labels, baselines,
   limitations).
 Next: Phase 2, precompute (SigLIP embeddings + full-resolution OCR).
+
+## 2026-10-07 — Recorded exception: precompute may process test images
+scripts/precompute.py MAY process test split images (OCR + SigLIP
+embeddings), so all three splits are precomputed by one pinned pipeline.
+Conditions:
+- Deterministic image transforms only. The script keeps id / image_index /
+  image_path from each test.jsonl record and drops every label field as
+  the line is parsed; it never loads labels and computes no aggregates,
+  metrics or statistics over test outputs.
+- It prints a notice whenever it processes test.
+- Test shards must use the same run configuration as train/val (same
+  preprocessing version, SigLIP id + revision, pooling grid, OCR engine +
+  version), checked through each split's run_config.json.
+- No human or agent opens, inspects or aggregates test shards (embeddings
+  or OCR text) until final_eval.py runs. bench_precompute.py and
+  nn_sanity_check.py refuse any split but val; training and calibration
+  code must not load test shards.
+- final_eval.py remains the only code that reads test labels.
