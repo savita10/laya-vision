@@ -29,6 +29,7 @@ resumes from it when started again with the same arguments.
     python scripts/train_vision.py --base-ckpt <drive>/step5/laya_finetuned \\
         --shards-root <drive>/phase2/shards --records-dir <drive>/data/rvl_v1 \\
         --out-dir <drive>/phase3/runs/tiny --limit 2000 --epochs 1          # tiny run
+    python scripts/train_vision.py ... --out-dir <drive>/phase3/diag --diag-equivalence   # GPU path check
 """
 
 import argparse
@@ -75,6 +76,10 @@ def parse_args():
     p.add_argument("--log-every", type=int, default=20, help="optimizer updates between log lines")
     p.add_argument("--eval-batch", type=int, default=64)
     p.add_argument("--device", default="cuda")
+    p.add_argument("--diag-equivalence", action="store_true",
+                   help="diagnose the image path vs DecisionModel.forward on this device (attention x amp x "
+                        "compile), run the startup check under the training configuration, write "
+                        "<out-dir>/diag_equivalence.json and exit; loads val (monitor rows) only, never trains")
     return p.parse_args()
 
 
@@ -128,6 +133,44 @@ def find_resume(out_dir):
     return None
 
 
+def monitor_subset(args, builder, records_dir, cache_dir):
+    val, val_prov = vision.load_split_data(args.shards_root, records_dir / "val.jsonl", "val", builder,
+                                           cache_dir, args.tokens)
+    with open(args.comparison_set, encoding="utf-8") as f:
+        comparison_ids = set(json.load(f)["ids"])
+    monitor_rows = [r for r, i in enumerate(val.ids) if i not in comparison_ids][:args.monitor_limit]
+    return val.subset(monitor_rows), {**val_prov, "n": len(monitor_rows), "excludes": "comparison set ids"}
+
+
+def diag_equivalence(args, model, builder, records_dir, cache_dir, out_dir, device):
+    """--diag-equivalence: the factor grid, then the startup check exactly as training runs it."""
+    import transformers
+
+    monitor, _ = monitor_subset(args, builder, records_dir, cache_dir)
+    print(f"torch {torch.__version__}, transformers {transformers.__version__}, device {device}"
+          + (f" ({torch.cuda.get_device_name(device)})" if device.type == "cuda" else ""), flush=True)
+    rows = vision.diagnose_equivalence(model, monitor, builder, device)
+    model.to(device)
+    if not args.no_checkpointing:
+        model.encoder.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.head_checkpointing = True
+    try:
+        diff = vision.equivalence_check(model, monitor, builder, device, None if args.amp == "none" else args.amp)
+        result = {"passed": True, "max_abs_diff": diff}
+    except SystemExit as e:
+        result = {"passed": False, "error": str(e)}
+    result.update({"attention": model.encoder.config._attn_implementation, "amp": args.amp,
+                   "compile": model.encoder.config.reference_compile})
+    print(f"startup check under the training configuration: {result}", flush=True)
+    vision.write_json_atomic(out_dir / "diag_equivalence.json",
+                             {"torch": torch.__version__, "transformers": transformers.__version__,
+                              "device": torch.cuda.get_device_name(device) if device.type == "cuda" else str(device),
+                              "grid": rows, "training_config_check": result})
+    print(f"Wrote {out_dir / 'diag_equivalence.json'}")
+    if not result["passed"]:
+        raise SystemExit(1)
+
+
 def main():
     args = parse_args()
     vision.check_laya_version()
@@ -151,16 +194,11 @@ def main():
           f"text-only {builder.text_budget(False)}", flush=True)
 
     cache_dir = args.cache_dir or out_dir / "cache"
+    if args.diag_equivalence:
+        return diag_equivalence(args, model, builder, records_dir, cache_dir, out_dir, device)
     train, train_prov = vision.load_split_data(args.shards_root, records_dir / "train.jsonl", "train", builder,
                                                cache_dir, args.tokens, args.limit)
-    val, val_prov = vision.load_split_data(args.shards_root, records_dir / "val.jsonl", "val", builder,
-                                           cache_dir, args.tokens)
-    with open(args.comparison_set, encoding="utf-8") as f:
-        comparison_ids = set(json.load(f)["ids"])
-    monitor_rows = [r for r, i in enumerate(val.ids) if i not in comparison_ids][:args.monitor_limit]
-    monitor = val.subset(monitor_rows)
-    del val
-    monitor_prov = {**val_prov, "n": len(monitor), "excludes": "comparison set ids"}
+    monitor, monitor_prov = monitor_subset(args, builder, records_dir, cache_dir)
 
     vision.freeze_for_training(model)
     report = vision.parameter_report(model)
@@ -185,8 +223,9 @@ def main():
         model.encoder.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         model.head_checkpointing = True
     diff = vision.equivalence_check(model, monitor, builder, device, None if args.amp == "none" else args.amp)
-    print(f"equivalence check passed (no-image path == DecisionModel.forward; inputs_embeds path max |diff| "
-          f"{diff:.2e})", flush=True)
+    print(f"equivalence check passed (no-image path == DecisionModel.forward; image path without slots max "
+          f"|diff| {diff:.2e}; attention {model.encoder.config._attn_implementation}, amp {args.amp}, compile "
+          f"{model.encoder.config.reference_compile})", flush=True)
 
     head_params = [p for n, p in model.named_parameters() if p.requires_grad and not n.startswith("projector.")]
     proj_params = [p for n, p in model.named_parameters() if p.requires_grad and n.startswith("projector.")]

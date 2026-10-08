@@ -69,22 +69,35 @@ Linear(768, 1024), GELU, Linear(1024, 1024).
   literally `super().forward`. This is reading (A) of the image=None
   contract: same code path, our weights.
 - **With an image:**
-  1. `e = encoder.embeddings.tok_embeddings(input_ids)`.
-  2. Write `projector(visual)` into the visual slots, out of place.
-  3. Run `encoder(inputs_embeds=e, attention_mask)`.
-  4. Run the post-encoder head code copied from laya 0.3.24.
+  1. Run `encoder(input_ids, attention_mask)`, the same call
+     `DecisionModel.forward` makes.
+  2. A forward hook on `encoder.embeddings` replaces the embedding output at
+     the visual slots with `drop(norm(projector(visual)))`, out of place.
+  3. Run the post-encoder head code copied from laya 0.3.24.
 
-  ModernBERT applies its embedding LayerNorm to `inputs_embeds` as well, so
-  the projector targets the raw, pre-norm embedding space. A mixed batch
-  (some rows text-only) takes this path; rows with no slots are then
-  numerically identical to upstream's forward.
+  LayerNorm is per token, so this equals feeding `projector(visual)` as a
+  pre-norm token embedding: the projector targets the raw, pre-norm space.
+  Text tokens take upstream's exact code, including ModernBERT's compiled
+  embeddings on GPU. A mixed batch (some rows text-only) takes this path;
+  rows with no slots match upstream's forward exactly.
+
+  The first version passed `inputs_embeds` instead. On GPU that skipped
+  ModernBERT's compiled input_ids embedding, so the outputs differed
+  (DECISIONS.md 2026-10-08, "P3 GPU equivalence").
 - **Required equivalence test** (`tests/test_vision_equivalence.py`, and a
   startup check in both train and eval):
   - the no-image path equals `DecisionModel.forward` exactly;
-  - the `inputs_embeds` path with no slots matches it;
+  - the image path with no slots matches it exactly. At startup this runs
+    under the run's device, attention, amp and compile settings, and real
+    slots must change the output;
+  - the hook equals the inputs_embeds formulation, and its unpadded
+    (flash) branch matches its padded one;
   - gradients reach only the projector and head;
   - text-only sequences equal upstream `build_sequence`;
   - visual block and markers survive text overflow.
+
+  `train_vision.py --diag-equivalence` runs the attention × amp × compile
+  grid on the GPU and writes `diag_equivalence.json`.
 
 ### Trainable parameters (d=1024)
 
@@ -183,7 +196,8 @@ minus the weight gradients.
 
 ## 8. Laya touch-points (no laya file is edited)
 
-1. `VisionDecisionModel` subclasses `DecisionModel`. The image path copies
+1. `VisionDecisionModel` subclasses `DecisionModel`. The image path injects
+   visual tokens through a forward hook on `encoder.embeddings` and copies
    the post-encoder part of `DecisionModel.forward` (0.3.24), guarded by the
    equivalence test.
 2. `laya.common.build_sequence(state_ids=…)` is used as-is to reserve the
@@ -195,7 +209,7 @@ minus the weight gradients.
    weights on the Gate-0 base; `laya.load` would reject the extra keys.
 5. (P5) `Agent._encode_state` and `_infer` are private and call the model
    positionally, so they need a `VisionAgent` subclass.
-6. (P5) FastLaya, compiled and ONNX paths do not take `inputs_embeds`. The
+6. (P5) FastLaya, compiled and ONNX paths bypass the visual hook. The
    image path must refuse `fast=True` with an explicit error.
 
 Also used read-only, as upstream's own fine-tune script does:

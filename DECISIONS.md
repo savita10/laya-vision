@@ -352,3 +352,45 @@ Next: Phase 3, projector + head training (tiny run first).
    - Visual placeholder id = pad id (its embedding is always replaced).
    - eval_vision.py without --run-dir evaluates the untrained Gate-0 base,
      text view only (zero-shot Laya on OCR) as an extra reference row.
+
+## 2026-10-08 — P3 GPU equivalence: image path rerouted through input_ids
+Observed: on the L4 the train_vision.py startup check failed with max |diff|
+3.20e+01 between the image path (no visual slots) and DecisionModel.forward.
+tests/test_vision_equivalence.py passed exactly on the same checkpoint on CPU.
+Cause found in transformers 4.49 modeling_modernbert.py (to be confirmed
+with --diag-equivalence on the L4):
+- laya's build_model builds the encoder with attn_implementation="sdpa", so
+  flash/unpadding is not in play.
+- ModernBERT's reference_compile (None in the checkpoint config) turns on
+  automatically on CUDA when triton is available, and is forced off on CPU.
+- With it on, input_ids go through a torch.compile'd embedding + LayerNorm
+  (compiled_embeddings), while inputs_embeds always takes the eager
+  LayerNorm. The two paths ran different code on GPU and the same code on
+  CPU.
+- Small differences there are amplified through 28 layers under bf16. 32.0
+  is exactly one bf16 step at magnitudes 4096-8192.
+Fix (implementation only; the design is unchanged):
+- The image path now calls the encoder with input_ids, exactly as
+  DecisionModel.forward does. A forward hook on encoder.embeddings replaces
+  the embedding output at the visual slots with drop(norm(projector(v))).
+- LayerNorm is per token, so this equals feeding projector(v) as a pre-norm
+  token embedding. The projector still targets the pre-LayerNorm space.
+- Text tokens, and every row of a batch without slots, now run upstream's
+  exact code: compiled embeddings, any attention implementation, any amp.
+- No attention implementation or compile setting is forced. The run keeps
+  laya's sdpa and ModernBERT's default reference_compile, as Gate 0 did.
+- The hook also handles flash-attention's unpadded layout, for P5.
+Checks:
+- The startup check stays a hard stop in train and eval. It now runs the
+  run's own device, attention, amp and compile settings, and also requires
+  that real visual slots change the output.
+- train_vision.py --diag-equivalence runs the grid attention
+  (eager/sdpa/flash) x amp (none/bf16) x compile (off/on). For each it
+  reports the fixed path, the old inputs_embeds path, run-to-run noise and
+  logit magnitudes, then the startup check under the training
+  configuration. It writes diag_equivalence.json.
+Touch-point 1 (2026-10-08 P3 design, item 5) now reads: the image path
+injects visual tokens with a forward hook on the encoder's embeddings module
+and copies the post-encoder part of DecisionModel.forward. Touch-point 6:
+FastLaya, compiled and ONNX paths bypass the hook, and still must refuse
+images explicitly.

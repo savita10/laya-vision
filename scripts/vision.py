@@ -12,8 +12,9 @@ head (head layers, type embedding, scorer).
 Sequence (upstream laya.common.build_sequence, unchanged):
     [CLS] choice question: <ins> [SEP] [MASK] opt0 ... [MASK] opt15 [SEP] <state> [SEP]
 The state is built in the fixed order [visual | OCR text | features | user text]:
-    visual  32 placeholder ids followed by one [SEP]; the placeholders' token
-            embeddings are replaced by projected SigLIP tokens (inputs_embeds)
+    visual  32 placeholder ids followed by one [SEP]; at the placeholders the
+            embedding output is replaced by norm(projected SigLIP token), via a
+            forward hook on encoder.embeddings (the encoder still gets input_ids)
     text    OCR, then derived features, then user text (features and user text
             are empty in v1); truncated from the end when the budget runs out
 The option markers sit inside the question head, before the state, so the
@@ -23,8 +24,10 @@ sequence is exactly upstream's for the same text.
 
 Laya touch-points (DECISIONS.md 2026-10-08): VisionDecisionModel subclasses
 laya.common.DecisionModel; its no-image path IS DecisionModel.forward, and its
-image path duplicates the post-encoder part of DecisionModel.forward as of
-laya 0.3.24 (guarded by tests/test_vision_equivalence.py and a startup check).
+image path calls the encoder with input_ids, injects visual tokens with a
+forward hook on encoder.embeddings, and duplicates the post-encoder part of
+DecisionModel.forward as of laya 0.3.24 (guarded by
+tests/test_vision_equivalence.py and a startup check).
 """
 
 import hashlib
@@ -113,6 +116,27 @@ class Projector(nn.Module):
         return self.net(x)
 
 
+def _inject_visual(module, args, output):
+    """Forward hook on encoder.embeddings: put projected visual tokens into the visual slots.
+
+    Set per call by VisionDecisionModel.forward through `module._laya_visual` =
+    (rows, positions, projected tokens [n, d], attention_mask), else None (no-op). The tokens
+    get the same LayerNorm + dropout as text embeddings. Handles ModernBERT's padded output
+    [B, L, d] and its flash-attention unpadded output [nnz, d].
+    """
+    inject = module.__dict__.get("_laya_visual")
+    if inject is None:
+        return None
+    rows, pos, tokens, attention_mask = inject
+    v = module.drop(module.norm(tokens.to(module.tok_embeddings.weight.dtype))).to(output.dtype)
+    if output.dim() == 3:
+        return output.index_put((rows, pos), v)
+    # Unpadded: row-major position among attended tokens (visual slots are always attended).
+    flat = rows * attention_mask.size(1) + pos
+    idx = attention_mask.flatten().long().cumsum(0)[flat] - 1
+    return output.index_put((idx,), v)
+
+
 def _decision_model_class():
     from laya.common import DecisionModel
 
@@ -123,18 +147,43 @@ def make_vision_model_class():
     DecisionModel = _decision_model_class()
 
     class VisionDecisionModel(DecisionModel):
-        """DecisionModel + projector; projected visual tokens enter as inputs_embeds."""
+        """DecisionModel + projector; projected visual tokens enter through a hook on encoder.embeddings."""
 
         def __init__(self, encoder, head_layers=2, n_act=2, dropout=0.1, no_init=False, visual_dim=VISUAL_DIM):
             super().__init__(encoder, head_layers, n_act, dropout, no_init=no_init)
             # Always initialised (never on meta): the base checkpoint has no projector.
             self.projector = Projector(visual_dim, encoder.config.hidden_size)
+            encoder.embeddings.register_forward_hook(_inject_visual)
 
         def forward(self, input_ids, attention_mask, marker_pos, marker_mask, qtype, detach_encoder=False,
                     visual=None, visual_pos=None):
             if visual is None:
                 # No image: exactly upstream's forward (reading A, DECISIONS.md 2026-10-08).
                 return super().forward(input_ids, attention_mask, marker_pos, marker_mask, qtype, detach_encoder)
+            # The encoder is always called with input_ids, so every text token takes upstream's
+            # path (compiled embeddings on GPU, any attention implementation). The hook then
+            # swaps the embedding output at the visual slots for norm(projector(v)); LayerNorm is
+            # per token, so this equals feeding projector(v) as a pre-norm token embedding.
+            emb = self.encoder.embeddings
+            slots = visual_pos >= 0
+            inject = None
+            if slots.any():
+                rows = torch.arange(input_ids.size(0), device=input_ids.device)[:, None].expand_as(visual_pos)
+                inject = (rows[slots], visual_pos[slots], self.projector(visual)[slots], attention_mask)
+            object.__setattr__(emb, "_laya_visual", inject)
+            try:
+                h = self.encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+            finally:
+                object.__setattr__(emb, "_laya_visual", None)
+            return self._decide(h, attention_mask, marker_pos, marker_mask, qtype, detach_encoder)
+
+        def forward_inputs_embeds(self, input_ids, attention_mask, marker_pos, marker_mask, qtype,
+                                  visual, visual_pos, detach_encoder=False):
+            """The pre-fix image path (encoder(inputs_embeds=...)), kept for --diag-equivalence only.
+
+            On GPU it differs from upstream's input_ids path: ModernBERT compiles its input_ids
+            embedding (reference_compile) but runs inputs_embeds eagerly (DECISIONS.md 2026-10-08,
+            GPU equivalence)."""
             e = self.encoder.embeddings.tok_embeddings(input_ids)
             slots = visual_pos >= 0
             if slots.any():
@@ -583,25 +632,140 @@ def seed_everything(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def equivalence_check(model, data, builder, device, amp, n=4, tol=1e-3):
-    """Required check (DECISIONS.md 2026-10-08): with no visual slots, the image path
-    (inputs_embeds + copied head) must match DecisionModel.forward. Returns max |diff|."""
+def _check_batches(data, builder, device, n):
+    """The first n rows as a text-only batch and as a combined batch (real visual slots)."""
+    rows = list(range(min(n, len(data))))
+    keys = ("input_ids", "attention_mask", "marker_pos", "marker_mask", "qtype")
+    out = {}
+    for view in ("text", "combined"):
+        batch = collate([data.item(builder, r, view) for r in rows], data, builder.tok.pad_token_id)
+        out[view] = ([batch[k].to(device) for k in keys], batch["visual"].to(device), batch["visual_pos"].to(device))
+    return out
+
+
+def _max_diff(a, b):
+    """(max |diff| of choice logits, max |diff| of act logits)."""
+    return (a[0] - b[0]).abs().max().item(), (a[1] - b[1]).abs().max().item()
+
+
+def equivalence_check(model, data, builder, device, amp, n=8, tol=1e-3):
+    """Required check (DECISIONS.md 2026-10-08), run under the run's own device, attention,
+    amp and compile settings. With no visual slots the image path (encoder on input_ids +
+    visual hook + copied head) must match DecisionModel.forward; the no-image path must BE
+    DecisionModel.forward. With real slots the output must change. Returns max |diff|."""
     was_training = model.training
     model.eval()
-    rows = list(range(min(n, len(data))))
-    items = [data.item(builder, r, "text") for r in rows]
-    batch = collate(items, data, builder.tok.pad_token_id)
-    args = [batch[k].to(device) for k in ("input_ids", "attention_mask", "marker_pos", "marker_mask", "qtype")]
+    b = _check_batches(data, builder, device, n)
+    args, visual, visual_pos = b["text"]
+    cargs, cvisual, cvisual_pos = b["combined"]
     with torch.no_grad(), autocast(device, amp):
-        ref_logits, ref_act = _decision_model_class().forward(model, *args)
-        none_logits, none_act = model(*args)
-        emb_logits, emb_act = model(*args, visual=batch["visual"].to(device),
-                                    visual_pos=torch.full_like(batch["visual_pos"], -1).to(device))
+        ref = _decision_model_class().forward(model, *args)
+        none = model(*args)
+        emb = model(*args, visual=visual, visual_pos=torch.full_like(visual_pos, -1))
+        with_img = model(*cargs, visual=cvisual, visual_pos=cvisual_pos)
+        without_img = model(*cargs, visual=cvisual, visual_pos=torch.full_like(cvisual_pos, -1))
     model.train(was_training)
-    if not (torch.equal(ref_logits, none_logits) and torch.equal(ref_act, none_act)):
+    if not (torch.equal(ref[0], none[0]) and torch.equal(ref[1], none[1])):
         raise SystemExit("equivalence check failed: the no-image path is not DecisionModel.forward.")
-    diff = max((ref_logits - emb_logits).abs().max().item(), (ref_act - emb_act).abs().max().item())
+    diff = max(_max_diff(ref, emb))
     if diff > tol:
-        raise SystemExit(f"equivalence check failed: inputs_embeds path differs from DecisionModel.forward "
-                         f"by {diff:.2e} (> {tol}); the copied head is out of step with laya {LAYA_VERSION}.")
+        raise SystemExit(f"equivalence check failed: the image path with no visual slots differs from "
+                         f"DecisionModel.forward by {diff:.2e} (> {tol}) on {device} (amp {amp}, attention "
+                         f"{model.encoder.config._attn_implementation}, compile "
+                         f"{model.encoder.config.reference_compile}). Run train_vision.py --diag-equivalence.")
+    if torch.equal(with_img[0], without_img[0]):
+        raise SystemExit("equivalence check failed: visual slots did not change the output (hook not applied).")
     return diff
+
+
+def _with_attention(model, impl):
+    """A copy of `model` whose encoder is rebuilt with attention implementation `impl`
+    (ModernBERT picks its rotary module at construction, so flash needs a rebuild)."""
+    import copy
+
+    from laya.common import _no_init_weights
+    from transformers import AutoModel
+
+    cfg = copy.deepcopy(model.encoder.config)
+    with _no_init_weights():
+        enc = AutoModel.from_config(cfg, attn_implementation=impl)
+    enc.load_state_dict(model.encoder.state_dict())
+    enc.embeddings.register_forward_hook(_inject_visual)
+    encoder = model.encoder
+    del model.encoder
+    try:
+        clone = copy.deepcopy(model)
+    finally:
+        model.encoder = encoder
+    clone.encoder = enc
+    return clone
+
+
+def diagnose_equivalence(model, data, builder, device, n=8):
+    """--diag-equivalence: where does the image path diverge from DecisionModel.forward on this device?
+
+    Starts from fp32 / compile off / eager attention, then runs every combination of
+    attention (eager, sdpa, flash_attention_2 if installed) x amp (none, bf16) x
+    ModernBERT reference_compile (off, on). For each it prints max |diff| against
+    DecisionModel.forward (choice logits / act logits) for:
+      hook      the image path as fixed (encoder on input_ids, visual hook), no slots
+      embeds    the pre-fix path (encoder(inputs_embeds=...)), no slots
+      repeat    DecisionModel.forward run twice (run-to-run noise floor)
+    plus hook-vs-embeds with real visual slots, and the largest |logit| / |act logit|
+    (one bf16 step at magnitude m is 2**(floor(log2 m) - 7)). Returns the rows.
+    """
+    from transformers.utils import is_flash_attn_2_available
+
+    D = _decision_model_class()
+    impls = ["eager", "sdpa"]
+    if torch.device(device).type == "cuda" and is_flash_attn_2_available():
+        impls.append("flash_attention_2")
+    else:
+        print("flash_attention_2: flash_attn not installed (or not on CUDA), skipped", flush=True)
+    model = model.float().cpu().eval()
+    baseline = ("eager", "none", False)
+    rows = []
+    print(f"{'attention':18s} {'amp':5s} {'compile':7s} | {'hook logit/act':17s} | {'embeds logit/act':17s} | "
+          f"{'repeat':8s} | {'hook~embeds slots':17s} | max|logit| max|act|", flush=True)
+    for impl in impls:
+        m = _with_attention(model, impl).to(device).eval()
+        b = _check_batches(data, builder, device, n)
+        args, visual, visual_pos = b["text"]
+        cargs, cvisual, cvisual_pos = b["combined"]
+        no_slots = torch.full_like(visual_pos, -1)
+        for amp in ("none", "bf16"):
+            for comp in (False, True):
+                if torch.device(device).type != "cuda" and (comp or amp != "none"):
+                    continue
+                m.encoder.config.reference_compile = comp
+                try:
+                    with torch.no_grad(), autocast(device, None if amp == "none" else amp):
+                        ref = D.forward(m, *args)
+                        ref2 = D.forward(m, *args)
+                        hook = m(*args, visual=visual, visual_pos=no_slots)
+                        embeds = m.forward_inputs_embeds(*args, visual, no_slots)
+                        hook_s = m(*cargs, visual=cvisual, visual_pos=cvisual_pos)
+                        embeds_s = m.forward_inputs_embeds(*cargs, cvisual, cvisual_pos)
+                except Exception as e:  # report and keep going: one combination failing is a finding
+                    print(f"{impl:18s} {amp:5s} {str(comp):7s} | ERROR {type(e).__name__}: {e}", flush=True)
+                    rows.append({"attention": impl, "amp": amp, "compile": comp,
+                                 "error": f"{type(e).__name__}: {e}"})
+                    continue
+                masked = ref[0].masked_fill(~args[3], 0)
+                key = (impl, amp, comp)
+                row = {"attention": impl, "amp": amp, "compile": comp, "baseline": key == baseline,
+                       "one_factor_from_baseline": sum(x != y for x, y in zip(key, baseline)) == 1,
+                       "hook": _max_diff(ref, hook), "embeds": _max_diff(ref, embeds),
+                       "repeat": max(_max_diff(ref, ref2)), "hook_vs_embeds_slots": _max_diff(hook_s, embeds_s),
+                       "max_abs_logit": masked.abs().max().item(), "max_abs_act": ref[1].abs().max().item()}
+                rows.append(row)
+                tag = " <- baseline" if row["baseline"] else (" <- one factor" if row["one_factor_from_baseline"]
+                                                               else "")
+                print(f"{impl:18s} {amp:5s} {str(comp):7s} | {row['hook'][0]:.1e}/{row['hook'][1]:.1e} | "
+                      f"{row['embeds'][0]:.1e}/{row['embeds'][1]:.1e} | {row['repeat']:.1e} | "
+                      f"{row['hook_vs_embeds_slots'][0]:.1e}/{row['hook_vs_embeds_slots'][1]:.1e} | "
+                      f"{row['max_abs_logit']:.1f} {row['max_abs_act']:.1f}{tag}", flush=True)
+        del m
+        if torch.device(device).type == "cuda":
+            torch.cuda.empty_cache()
+    return rows

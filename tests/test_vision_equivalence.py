@@ -2,10 +2,16 @@
 
 Model checks run on CPU with a small random ModernBERT (no download):
   1. VisionDecisionModel without an image returns exactly DecisionModel.forward.
-  2. The inputs_embeds path with no visual slots matches DecisionModel.forward,
+  2. The image path with no visual slots equals DecisionModel.forward exactly,
      so the copied post-encoder head code is in step with laya 0.3.24.
   3. With visual slots the output changes, gradients reach the projector and
      the head, and none reach the frozen encoder or act head.
+  3b. With visual slots, the hook path (encoder on input_ids, embedding output
+     replaced at the slots) equals the inputs_embeds formulation (projector
+     output as a pre-norm token embedding), and the hook's unpadded
+     (flash-attention) branch writes the same tokens as its padded branch.
+     The GPU-only factors (compiled embeddings, bf16, flash) are covered by
+     train_vision.py --diag-equivalence and the startup check.
 Sequence checks need the Gate-0 tokenizer (--base-ckpt, or the pinned
 convaiinnovations/laya revision from the Hub; skipped if neither loads):
   4. A text-only sequence is token-for-token upstream build_sequence's.
@@ -77,8 +83,8 @@ def test_embeds_path_matches_upstream():
     with torch.no_grad():
         a = base(*args)
         b = vis(*args, visual=visual, visual_pos=no_slots)
-    diff = max((a[0] - b[0]).abs().max().item(), (a[1] - b[1]).abs().max().item())
-    assert diff < 1e-5, diff
+    # Same encoder call (input_ids) and the copied head: equal, not just close.
+    assert torch.equal(a[0], b[0]) and torch.equal(a[1], b[1])
 
 
 def test_visual_slots_train_only_projector_and_head():
@@ -103,6 +109,43 @@ def test_visual_slots_train_only_projector_and_head():
             assert p.grad is not None and p.grad.abs().sum() > 0, name
         if name.startswith(("encoder.", "act_head.")):
             assert p.grad is None, name
+
+
+def test_hook_matches_inputs_embeds_with_slots():
+    _, vis = tiny_models()
+    args = tiny_batch()
+    n = args[0].size(0)
+    visual = torch.randn(n, 6, 24)
+    slots = torch.arange(12, 18).repeat(n, 1)
+    slots[1] = -1
+    with torch.no_grad():
+        a = vis(*args, visual=visual, visual_pos=slots)
+        b = vis.forward_inputs_embeds(*args, visual, slots)
+    assert torch.allclose(a[0], b[0], atol=1e-5) and torch.allclose(a[1], b[1], atol=1e-5)
+    assert vis.encoder.embeddings.__dict__.get("_laya_visual") is None
+
+
+def test_hook_unpadded_branch():
+    _, vis = tiny_models()
+    emb = vis.encoder.embeddings.eval()
+    ids, att, *_ = tiny_batch()
+    slots = torch.arange(3, 9).repeat(ids.size(0), 1)
+    slots[1, 4:] = -1
+    keep = slots >= 0
+    rows = torch.arange(ids.size(0))[:, None].expand_as(slots)
+    tokens = torch.randn(ids.size(0), 6, emb.tok_embeddings.weight.size(1))[keep]
+    with torch.no_grad():
+        padded = emb(input_ids=ids)
+        unpadded = padded[att.bool()]
+        inject = (rows[keep], slots[keep], tokens, att)
+        object.__setattr__(emb, "_laya_visual", inject)
+        try:
+            out_p = vision._inject_visual(emb, (), padded)
+            out_u = vision._inject_visual(emb, (), unpadded)
+        finally:
+            object.__setattr__(emb, "_laya_visual", None)
+    assert not torch.equal(out_p, padded)
+    assert torch.equal(out_p[att.bool()], out_u)
 
 
 def load_tokenizer(base_ckpt=None):
@@ -168,9 +211,12 @@ def main():
     test_no_image_is_upstream()
     print("ok 1  no-image path == DecisionModel.forward (exact)")
     test_embeds_path_matches_upstream()
-    print("ok 2  inputs_embeds path, no slots == DecisionModel.forward")
+    print("ok 2  image path, no slots == DecisionModel.forward (exact)")
     test_visual_slots_train_only_projector_and_head()
     print("ok 3  visual slots change output; grads reach projector + head only")
+    test_hook_matches_inputs_embeds_with_slots()
+    test_hook_unpadded_branch()
+    print("ok 3b visual hook == inputs_embeds formulation; unpadded branch == padded branch")
     tok, head_max_len = load_tokenizer(args.base_ckpt)
     if tok is not None:
         b = check_sequences(tok, head_max_len)
