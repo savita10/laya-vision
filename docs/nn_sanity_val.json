@@ -1,0 +1,227 @@
+{
+  "n": 5000,
+  "k": 5,
+  "tokens": 32,
+  "chance_agreement": 0.06251936000000001,
+  "embed_config": {
+    "preprocessing": {
+      "version": "p2v1",
+      "steps": [
+        "PIL decode; convert('RGB')",
+        "ImageOps.autocontrast(cutoff=1, preserve_tone=True) on the full page",
+        "resize so the long side is 384 px, aspect preserved, BICUBIC",
+        "centre pad to 384x384 with RGB (255, 255, 255)",
+        "SigLIP normalisation: x/255, then (x - 0.5) / 0.5 (checked against the processor config)"
+      ]
+    },
+    "siglip": {
+      "model_id": "google/siglip-base-patch16-384",
+      "revision": "41aec1c83b32e0a6fca20ad88ba058aa5b5ea394",
+      "tower": "SiglipVisionModel.last_hidden_state (post-layernorm patch tokens; no attention-pool head)",
+      "compute_dtype": "float32",
+      "patch_grid": [
+        24,
+        24
+      ],
+      "pooling": {
+        "type": "average, fixed, non-overlapping",
+        "grid_rows_cols": [
+          8,
+          8
+        ],
+        "patches_per_token_rows_cols": [
+          3,
+          3
+        ],
+        "token_order": "row-major (top-left first)",
+        "tokens": 64
+      },
+      "stored_dtype": "float16",
+      "hidden_size": 768
+    }
+  },
+  "representations": {
+    "mean": {
+      "nn1_agreement": 0.7556,
+      "knn5_accuracy": 0.7758,
+      "per_class": {
+        "letter": {
+          "n": 304,
+          "nn1_agreement": 0.631578947368421,
+          "knn5_accuracy": 0.7072368421052632
+        },
+        "form": {
+          "n": 317,
+          "nn1_agreement": 0.5930599369085173,
+          "knn5_accuracy": 0.5899053627760252
+        },
+        "email": {
+          "n": 316,
+          "nn1_agreement": 0.8829113924050633,
+          "knn5_accuracy": 0.8892405063291139
+        },
+        "handwritten": {
+          "n": 304,
+          "nn1_agreement": 0.8453947368421053,
+          "knn5_accuracy": 0.8486842105263158
+        },
+        "advertisement": {
+          "n": 315,
+          "nn1_agreement": 0.8031746031746032,
+          "knn5_accuracy": 0.8380952380952381
+        },
+        "scientific report": {
+          "n": 313,
+          "nn1_agreement": 0.5782747603833865,
+          "knn5_accuracy": 0.5686900958466453
+        },
+        "scientific publication": {
+          "n": 316,
+          "nn1_agreement": 0.8449367088607594,
+          "knn5_accuracy": 0.8765822784810127
+        },
+        "specification": {
+          "n": 316,
+          "nn1_agreement": 0.8892405063291139,
+          "knn5_accuracy": 0.8765822784810127
+        },
+        "file folder": {
+          "n": 306,
+          "nn1_agreement": 0.8823529411764706,
+          "knn5_accuracy": 0.9183006535947712
+        },
+        "news article": {
+          "n": 316,
+          "nn1_agreement": 0.7753164556962026,
+          "knn5_accuracy": 0.7848101265822784
+        },
+        "budget": {
+          "n": 311,
+          "nn1_agreement": 0.6816720257234726,
+          "knn5_accuracy": 0.7138263665594855
+        },
+        "invoice": {
+          "n": 322,
+          "nn1_agreement": 0.8074534161490683,
+          "knn5_accuracy": 0.8478260869565217
+        },
+        "presentation": {
+          "n": 309,
+          "nn1_agreement": 0.5954692556634305,
+          "knn5_accuracy": 0.6148867313915858
+        },
+        "questionnaire": {
+          "n": 315,
+          "nn1_agreement": 0.7301587301587301,
+          "knn5_accuracy": 0.7365079365079366
+        },
+        "resume": {
+          "n": 303,
+          "nn1_agreement": 0.9207920792079208,
+          "knn5_accuracy": 0.9240924092409241
+        },
+        "memo": {
+          "n": 317,
+          "nn1_agreement": 0.6309148264984227,
+          "knn5_accuracy": 0.6813880126182965
+        }
+      },
+      "duplicates": {
+        "threshold": 0.995,
+        "pairs": 7,
+        "cross_class_pairs": 0
+      }
+    },
+    "flat": {
+      "nn1_agreement": 0.7426,
+      "knn5_accuracy": 0.7604,
+      "per_class": {
+        "letter": {
+          "n": 304,
+          "nn1_agreement": 0.6118421052631579,
+          "knn5_accuracy": 0.6578947368421053
+        },
+        "form": {
+          "n": 317,
+          "nn1_agreement": 0.5615141955835962,
+          "knn5_accuracy": 0.4794952681388013
+        },
+        "email": {
+          "n": 316,
+          "nn1_agreement": 0.9082278481012658,
+          "knn5_accuracy": 0.9240506329113924
+        },
+        "handwritten": {
+          "n": 304,
+          "nn1_agreement": 0.8256578947368421,
+          "knn5_accuracy": 0.8552631578947368
+        },
+        "advertisement": {
+          "n": 315,
+          "nn1_agreement": 0.7523809523809524,
+          "knn5_accuracy": 0.7746031746031746
+        },
+        "scientific report": {
+          "n": 313,
+          "nn1_agreement": 0.5303514376996805,
+          "knn5_accuracy": 0.4984025559105431
+        },
+        "scientific publication": {
+          "n": 316,
+          "nn1_agreement": 0.8259493670886076,
+          "knn5_accuracy": 0.8670886075949367
+        },
+        "specification": {
+          "n": 316,
+          "nn1_agreement": 0.8829113924050633,
+          "knn5_accuracy": 0.8924050632911392
+        },
+        "file folder": {
+          "n": 306,
+          "nn1_agreement": 0.8725490196078431,
+          "knn5_accuracy": 0.9411764705882353
+        },
+        "news article": {
+          "n": 316,
+          "nn1_agreement": 0.689873417721519,
+          "knn5_accuracy": 0.7531645569620253
+        },
+        "budget": {
+          "n": 311,
+          "nn1_agreement": 0.7363344051446945,
+          "knn5_accuracy": 0.7395498392282959
+        },
+        "invoice": {
+          "n": 322,
+          "nn1_agreement": 0.7515527950310559,
+          "knn5_accuracy": 0.7919254658385093
+        },
+        "presentation": {
+          "n": 309,
+          "nn1_agreement": 0.598705501618123,
+          "knn5_accuracy": 0.6634304207119741
+        },
+        "questionnaire": {
+          "n": 315,
+          "nn1_agreement": 0.707936507936508,
+          "knn5_accuracy": 0.6825396825396826
+        },
+        "resume": {
+          "n": 303,
+          "nn1_agreement": 0.9174917491749175,
+          "knn5_accuracy": 0.9207920792079208
+        },
+        "memo": {
+          "n": 317,
+          "nn1_agreement": 0.7129337539432177,
+          "knn5_accuracy": 0.7318611987381703
+        }
+      },
+      "duplicates": {
+        "threshold": 0.995,
+        "pairs": 4,
+        "cross_class_pairs": 0
+      }
+    }
+  }
+}

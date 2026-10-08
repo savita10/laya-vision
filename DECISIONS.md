@@ -266,3 +266,35 @@ Conditions:
    recorded in DECISIONS.md." The precompute exception above is the
    first under this wording. shards.load_split refuses the test split
    unless called with allow_test=True, which only final_eval.py may pass.
+
+## 2026-10-08 — Gate 2: PASSED — Phase 2 closed
+Gate: shards complete, nearest-neighbour sanity check passes.
+- Shards complete: val 3, test 3, train 30 (2,000 images each), every
+  shard with a manifest and both passes (embed + OCR), 0 decode errors.
+  Config: p2v1 preprocessing, SigLIP base-384 @41aec1c8 stored at 8x8 =
+  64 tokens fp16, Tesseract LSTM --oem 1 --psm 3 eng (DECISIONS.md
+  2026-10-07). 7.0 GB on Drive.
+- Timings on one L4: val ~17 min, test ~15 min, train ~2 h; 8.24 img/s
+  overall. SigLIP 32 img/s; Tesseract 7.3 img/s on 12 workers, so OCR
+  is the bottleneck.
+- NN sanity check (val, 5,000 images, 32-token view, cosine, leave-one-out;
+  docs/nn_sanity_val.json): mean-of-tokens 1-NN agreement 0.756 vs
+  chance 0.0625 (12x), 5-NN accuracy 0.776. Concatenated tokens ("flat")
+  1-NN 0.743, 5-NN 0.760. Same-class documents clearly cluster in the
+  frozen embeddings.
+- Per class (mean 1-NN): weakest scientific report 0.578, form 0.593,
+  presentation 0.595, memo 0.631, letter 0.632; strongest resume 0.921,
+  specification 0.889, email 0.883, file folder 0.882. The weak set
+  overlaps Route A's confusion neighbourhoods (letter / memo,
+  form / questionnaire, scientific report / publication) and the classes
+  with known label noise (form), so P3 per-class reporting should watch them.
+- Near-duplicates (cos >= 0.995): 7 pairs (mean), 0 cross-class.
+- Route A comparison, indicative only: raw frozen-embedding 1-NN (0.756)
+  already exceeds Route A (0.501). Not like-for-like: the NN figure is a
+  leave-one-out classifier using labelled val neighbours over all 5,000
+  val images, while Route A is zero-shot on the 2,000-image comparison
+  set. The P3 comparison against 0.501 uses the trained model on the
+  fixed comparison ids.
+- Test shards exist under the 2026-10-07 exception; nothing has read or
+  aggregated them.
+Next: Phase 3, projector + head training (tiny run first).
