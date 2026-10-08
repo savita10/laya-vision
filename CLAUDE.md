@@ -14,25 +14,33 @@ backbones, multilingual vision, serving infrastructure beyond a demo script.
 - Vision encoder: SigLIP base, 384x384 input, FROZEN. Never trained.
 - Pooling: FIXED average pooling of patch embeddings to 32 visual tokens
   (token count is a tunable hyperparameter: ablate 8/16/32/64).
-- Projector: 2-layer MLP, TRAINED. Maps pooled SigLIP embeddings into the
-  Laya encoder's token-embedding space.
-- Backbone: Laya multilingual config (mmBERT-base, 1,024-token context),
-  FROZEN (light LoRA on top layers only if training plateaus — a gate
-  decision, not a default).
+- Projector: 2-layer MLP (768 -> 1024 -> 1024), TRAINED. Maps pooled
+  SigLIP embeddings into the Laya encoder's (pre-LayerNorm) token-embedding
+  space.
+- Backbone: convaiinnovations/laya (ModernBERT-large, d=1024), run at
+  max_len 512, initialised from the Gate-0 fine-tuned checkpoint
+  (Drive step5/laya_finetuned) — the backbone Gate 0 and Route A used
+  (DECISIONS.md 2026-10-08). FROZEN (light LoRA on top layers only if
+  training plateaus — a gate decision, not a default).
 - Decision head: Laya's existing head (option markers at [MASK] tokens),
   TRAINED.
-- Trainable parameters total: ~10–30M (projector + head only).
+- Trainable parameters total: ~10–30M (projector + head only; 28.1M at
+  d=1024).
 - Input order is FIXED everywhere: [visual tokens | OCR text | derived
   features | user text]. Same order in training and inference, always.
-- Token budget: 256 options + 32 visual + remainder for text. Truncation
-  policy: text yields first; options and visual tokens are never truncated.
+- Token budget (max_len 512): question + options (head_max_len 256 cap;
+  50 tokens for doc_type) + 32 visual + 1 [SEP] + remainder for text
+  (428 combined, 461 text-only). Truncation policy: text yields first;
+  options and visual tokens are never truncated.
 
 ## API contract (fixed)
 - The question/answer schema is FROZEN: three primitives (choice, score,
   noul), same response shape as upstream Laya. All extension happens in
   the state.
-- SDK: predict(state, questions, image=None). image=None must be
-  byte-identical in behaviour to upstream Laya.
+- SDK: predict(state, questions, image=None). image=None runs exactly
+  upstream Laya's code path (same tokenisation, sequence and forward) on
+  the Laya-Vision weights. Outputs differ from upstream checkpoints because
+  the decision head is trained (reading A, DECISIONS.md 2026-10-08).
 - HTTP: optional base64 image field in the state; requests without it are
   handled exactly as upstream laya-serve does. Superset of the
   Jev-compatible /v1/systemone shape — never a divergence from it.

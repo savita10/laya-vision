@@ -298,3 +298,57 @@ Gate: shards complete, nearest-neighbour sanity check passes.
 - Test shards exist under the 2026-10-07 exception; nothing has read or
   aggregated them.
 Next: Phase 3, projector + head training (tiny run first).
+
+## 2026-10-08 — P3 design approved (docs/phase3_design.md)
+1. Backbone: convaiinnovations/laya (ModernBERT-large, d=1024), run at
+   max_len 512, initialised from the Gate-0 fine-tuned checkpoint
+   (Drive step5/laya_finetuned): the backbone Gate 0 reproduced and Route A
+   used, replacing laya-multilingual (mmBERT-base). Projector 768 -> 1024 ->
+   1024. CLAUDE.md amended in the same commit. Before training, run
+   scripts/ocr_token_budget.py over train OCR; if more than 25% of pages lose
+   a large share (>= 50%) of their text, flag before training.
+2. image=None semantics: reading (A). image=None runs exactly upstream's
+   code path (tokenisation, sequence, forward) on the Laya-Vision weights;
+   outputs differ from upstream checkpoints because the head is trained.
+   CLAUDE.md SDK wording amended.
+3. Approved as proposed:
+   - Trained: projector (lr 1e-3) and decision head (head layers, scorer,
+     type_emb; lr 1e-4). Frozen: encoder, act head. 28,085,249 trainable.
+   - Loss: upstream CE + RLCD unchanged in form; hard one-hot target; no
+     label smoothing by default.
+   - Schedule: linear warmup (3%) then upstream's cosine to 1e-6.
+   - Divergence from upstream (recorded): bf16 autocast + encoder (and head)
+     gradient checkpointing instead of upstream's fp32.
+   - Temperature fitting deferred to P4.
+   - Sequence: one [SEP] after the visual block; no segment embedding;
+     canonical option order.
+   - Data: fp16 embedding load (32-token view derived from stored 8x8);
+     per-example modality dropout from a hash of (seed, epoch, id),
+     40/30/30 combined/image/text.
+   - Resumable checkpoints with optimizer, scheduler and RNG state.
+   - Required test: the no-image path equals DecisionModel.forward
+     (tests/test_vision_equivalence.py, also run at train/eval startup).
+4. Measured with the Gate-0 tokenizer: doc_type question head 50 tokens;
+   text budget 428 tokens combined, 461 text-only (the ~416 estimate
+   assumed a ~62-token head).
+5. Laya touch-points (no laya file edited):
+   1. VisionDecisionModel subclasses DecisionModel; its image path copies
+      the post-encoder part of DecisionModel.forward (laya 0.3.24).
+   2. laya.common.build_sequence(state_ids=...) used as-is to reserve the
+      visual slots.
+   3. Own collate instead of collate_items (visual, visual_pos).
+   4. Checkpoint adds projector.* keys; own loader overlays trainable weights
+      on the Gate-0 base (laya.load would reject them).
+   5. (P5) VisionAgent subclass for Agent._encode_state / _infer.
+   6. (P5) FastLaya / compiled / ONNX paths cannot take inputs_embeds; the
+      image path must refuse fast=True with an explicit error.
+   Read-only uses, as in upstream's fine-tune script: _fix_tokenizer_config,
+   proper_reward.
+6. Implementation choices made while building, for review:
+   - Epoch monitoring uses up to 1,000 val images OUTSIDE the 2,000-image
+     comparison set, so checkpoint choice never touches the reported ids.
+   - Defaults: 4 epochs (upstream), micro-batch 16 x grad-accum 4
+     (effective 64, as Gate 0), seed 20261008, save every 200 updates.
+   - Visual placeholder id = pad id (its embedding is always replaced).
+   - eval_vision.py without --run-dir evaluates the untrained Gate-0 base,
+     text view only (zero-shot Laya on OCR) as an extra reference row.
