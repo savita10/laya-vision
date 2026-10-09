@@ -433,6 +433,8 @@ def load_split_data(shards_root, records_path, split, builder, cache_dir=None, t
 
     if split not in ("train", "val"):
         raise SystemExit("Phase 3 code loads train and val only; test is final_eval.py's.")
+    if builder.n_visual != tokens:
+        raise SystemExit(f"sequence builder reserves {builder.n_visual} visual slots but {tokens} tokens requested")
     records = read_records(records_path, split)
     label_of = {r["id"]: rvlcdip.CLASSES.index(r["label_name"]) for r in records}
     split_dir = Path(shards_root) / split
@@ -473,8 +475,11 @@ def modality_for(seed, epoch, example_id, probs=DEFAULT_MODALITY_PROBS):
     return MODALITIES[-1]
 
 
-def collate(items, data, pad_id, n_visual=N_VISUAL):
+def collate(items, data, pad_id):
+    """Pad a list of items into tensors. Visual slots are sized by the data's token view
+    (data.emb [N, tokens, 768]), never a fixed count."""
     n = len(items)
+    n_visual = data.emb.shape[1]
     L = max(len(it["ids"]) for it in items)
     k = max(len(it["markers"]) for it in items)
     input_ids = torch.full((n, L), pad_id, dtype=torch.long)
@@ -490,6 +495,8 @@ def collate(items, data, pad_id, n_visual=N_VISUAL):
         marker_mask[i, :len(it["markers"])] = True
         target[i, :len(it["target"])] = torch.tensor(it["target"])
         if it["visual_pos"]:
+            if len(it["visual_pos"]) != n_visual:
+                raise ValueError(f"item has {len(it['visual_pos'])} visual slots, data has {n_visual} tokens")
             visual_pos[i] = torch.tensor(it["visual_pos"])
     visual = torch.from_numpy(data.emb[[it["row"] for it in items]].astype(np.float32))
     return {

@@ -17,6 +17,9 @@ convaiinnovations/laya revision from the Hub; skipped if neither loads):
   4. A text-only sequence is token-for-token upstream build_sequence's.
   5. A combined sequence keeps the markers and the whole visual block when
      the text overflows; only text is truncated.
+  6. At every visual token count (8, 16, 32, 64): the startup equivalence
+     check passes and one training step (collate -> forward -> loss ->
+     optimizer step) runs and updates the projector.
 
     python tests/test_vision_equivalence.py [--base-ckpt <dir>]
     pytest tests/test_vision_equivalence.py
@@ -197,6 +200,51 @@ def check_sequences(tok, head_max_len):
     return b
 
 
+def tiny_vision_model(vocab_size, pad_id, seed=0):
+    from transformers import AutoModel, ModernBertConfig
+
+    torch.manual_seed(seed)
+    cfg = ModernBertConfig(vocab_size=vocab_size, hidden_size=64, intermediate_size=96, num_hidden_layers=2,
+                           num_attention_heads=4, global_attn_every_n_layers=2, local_attention=8,
+                           max_position_embeddings=1024, pad_token_id=pad_id, reference_compile=False)
+    enc = AutoModel.from_config(cfg, attn_implementation="sdpa")
+    return vision.make_vision_model_class()(enc, head_layers=2, n_act=2, visual_dim=vision.VISUAL_DIM)
+
+
+def check_token_counts(tok, head_max_len, counts=(8, 16, 32, 64), n=12):
+    import numpy as np
+
+    q = doc_question()
+    g = np.random.default_rng(0)
+    for tokens in counts:
+        builder = vision.SequenceBuilder(tok, q, 512, head_max_len, tokens)
+        ocr = builder.encode_text([" ".join(["memo budget review"] * int(k)) for k in g.integers(0, 200, n)])
+        lengths = [len(x) for x in ocr]
+        emb = g.standard_normal((n, tokens, vision.VISUAL_DIM)).astype(np.float16)
+        data = vision.VisionData([f"id{i}" for i in range(n)], emb, [np.asarray(x, dtype=np.int32) for x in ocr],
+                                 lengths, [i % 16 for i in range(n)])
+        model = tiny_vision_model(len(tok), tok.pad_token_id)
+        vision.freeze_for_training(model)
+        vision.equivalence_check(model, data, builder, "cpu", None)
+        items = [data.item(builder, r, vision.MODALITIES[r % 3]) for r in range(n)]
+        batch = vision.collate(items, data, tok.pad_token_id)
+        assert batch["visual_pos"].shape == (n, tokens) and batch["visual"].shape == (n, tokens, vision.VISUAL_DIM)
+        model.train()
+        opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-3)
+        before = model.projector.net[0].weight.detach().clone()
+        logits, act = vision.forward(model, batch, "cpu")
+        loss, _, _ = vision.rlcd_loss(logits, batch["marker_mask"], batch["target"], batch["qtype"], 0.4)
+        (loss + 0.0 * act.sum()).backward()
+        opt.step()
+        assert torch.isfinite(loss) and not torch.equal(before, model.projector.net[0].weight)
+
+
+def test_token_counts():
+    tok, head_max_len = load_tokenizer()
+    if tok is not None:
+        check_token_counts(tok, head_max_len)
+
+
 def test_sequences():
     tok, head_max_len = load_tokenizer()
     if tok is not None:
@@ -223,6 +271,8 @@ def main():
         print(f"ok 4  text-only sequence == upstream build_sequence")
         print(f"ok 5  visual block and markers survive overflow (head {b.head_len} tokens, text budget "
               f"combined {b.text_budget(True)}, text-only {b.text_budget(False)})")
+        check_token_counts(tok, head_max_len)
+        print("ok 6  equivalence check + one training step at 8, 16, 32 and 64 visual tokens")
 
 
 if __name__ == "__main__":
