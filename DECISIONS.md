@@ -528,9 +528,14 @@ modes.
   - So low confidence on them is the expected behaviour.
   - Per-class reliability is not yet measured; it can be computed from
     eval_val_final.predictions.jsonl.
-- **Neighbourhood accuracy** (the neighbourhood_accuracy block of
-  eval_val_final.json): not recorded yet. The file is on Drive and its
-  values were not in the request. To be added.
+- **Neighbourhood accuracy** (eval_val_final.json, val comparison set,
+  combined / image / text):
+  - letter/email/memo 0.856 / 0.864 / 0.195;
+  - form/questionnaire 0.755 / 0.783 / 0.328;
+  - scientific report/publication 0.781 / 0.757 / 0.554.
+  - form/questionnaire is the weakest neighbourhood, and the only one
+    where image-only beats combined by more than 0.01.
+  - (Filled in 2026-10-10 from docs/final/eval_val_final.json.)
 Test is not involved: this is the val comparison set only.
 
 ## 2026-10-10 — Recorded exception: Route A reads test labels on the pre-registered test subsample
@@ -582,3 +587,140 @@ revision, and the Gate-0 fine-tuned Laya, zero-shot.
 - Next and last: final_eval.py on test, once, with --route-a-outputs
   pointing at this run's route_a_outputs.jsonl. It scores Route A again
   with the same metric code and compares on the same 1,000 ids.
+
+## 2026-10-10 — Gate 4: final evaluation (one touch of test), PASSED
+final_eval.py ran once on the 5,000-image test split, per
+docs/phase4_protocol.md. It was not forced or re-run.
+- Run: 2026-10-10 14:05–14:10, 1x L4, bf16, code cd12d0c, protocol
+  sha256 551ce940…
+- Checkpoint: run02_final (trainable sha256 ac98b183…, base a0914673…).
+- Temperatures: calibration.json f0a0b269…; applied combined 1.1076,
+  image 1.0683, text 1.0 (fitted 1.0395, not applied).
+- Data: 5,000 test images scored, none unscorable. Majority-class floor
+  0.0644.
+- Source: docs/final/final_results.json, and docs/final/eval_val_final.json
+  for the val comparison set.
+
+### Accuracy and calibration, all sets
+ECE is the headline ECE: laya.common.ece_score, 15 bins. The upstream
+harness's ECE agrees within 0.0002 on every test view (combined 0.0286 vs
+0.0285 raw).
+
+| Set | n | View | Accuracy | ECE raw | ECE calibrated | NLL raw → cal |
+|---|---|---|---|---|---|---|
+| **test** | 5,000 | **combined** | **0.8624** | 0.0285 | **0.0145** | 0.509 → 0.503 |
+| test | 5,000 | image | 0.8578 | 0.0199 | 0.0138 | 0.520 → 0.518 |
+| test | 5,000 | text | 0.2906 | 0.0338 | 0.0338 (T = 1.0) | 2.310 |
+| test, Route A subsample | 1,000 | combined | 0.873 | 0.0322 | 0.0397 | 0.483 → — |
+| test, Route A subsample | 1,000 | image | 0.864 | 0.0330 | 0.0225 | 0.482 → — |
+| test, Route A subsample | 1,000 | text | 0.293 | 0.0451 | 0.0451 | 2.310 |
+| val comparison set | 2,000 | combined | 0.847 | 0.0317 | 0.0188 | |
+| val comparison set | 2,000 | image | 0.8455 | 0.0263 | 0.0180 | |
+| val comparison set | 2,000 | text | 0.306 | 0.0467 | 0.0467 (T = 1.0) | |
+| val monitor | 1,000 | combined / image / text | 0.872 / 0.859 / 0.304 | — | — | |
+| val calibration pool | 3,000 | combined | — | 0.025 | 0.022 (cross-fit 0.0227) | |
+| val calibration pool | 3,000 | image | — | 0.023 | 0.011 (cross-fit 0.0128) | |
+| val calibration pool | 3,000 | text | — | 0.031 | 0.031 (T = 1.0; fitted would give 0.039) | |
+
+- On the 1,000-image subsample, calibration raised the combined view's
+  ECE (0.0322 → 0.0397). With n = 1,000 and 15 bins, ECE noise is of that
+  size. Both values are well under 0.10, and on the full 5,000 the change
+  is 0.0285 → 0.0145. Reported as measured.
+- The test neighbourhoods, combined / image / text:
+
+  | Neighbourhood | combined | image | text |
+  |---|---|---|---|
+  | letter/email/memo | 0.897 | 0.895 | 0.183 |
+  | form/questionnaire | 0.797 | 0.802 | 0.318 |
+  | scientific report/publication | 0.804 | 0.789 | 0.470 |
+
+- Test per-class accuracy (combined):
+  - weakest: scientific report 0.721, form 0.754, budget 0.773,
+    presentation 0.810;
+  - strongest: email 0.962, resume 0.959, file folder 0.940.
+  - Same pattern as the val error analysis.
+
+Baselines:
+
+| Baseline | Set | Accuracy |
+|---|---|---|
+| Majority class | test | 0.0644 |
+| Route A (zero-shot, VLM describe → Gate-0 Laya) | test subsample, 1,000, seed 17 | 0.510 |
+| Route A | val comparison set, 2,000, seed 11 | 0.501 |
+
+- **Route A on test was not re-scored by final_eval.py.** The run had no
+  --route-a-outputs, so final_results.json has route_a: null.
+  - The 0.510 is route_a.py's own scoring of the same 1,000 ids
+    (2026-10-10 entry above).
+  - Laya-Vision's numbers on those ids come from final_eval.py.
+  - Both use argmax accuracy over the same 16 options.
+
+### Like-for-like against Route A (same ids)
+
+| Set | Laya-Vision combined | Laya-Vision image | Route A | Gap (combined) |
+|---|---|---|---|---|
+| test subsample, 1,000 | **0.873** | 0.864 | 0.510 | +0.363 |
+| val comparison set, 2,000 | **0.847** | 0.8455 | 0.501 | +0.346 |
+
+### Latency and cost
+The figures cover the Laya-Vision forward only; precompute is listed
+separately below. GPU means 1x L4 in bf16, measured on test. CPU means
+12 vCPU, as reported by the human.
+
+| Model / view | GPU batched, per image (p50) | GPU batch of 64 (p50 / p95) | GPU batch-1 (p50 / p95) | CPU batch-1 | CPU batched, per image |
+|---|---|---|---|---|---|
+| combined | 15.2 ms | 974 / 1,005 ms | 43.2 / 45.3 ms | 875 ms | ~984 ms |
+| image | 2.95 ms | 189 / 191 ms | 42.4 / 43.3 ms | — | — |
+| text | 15.6 ms | 999 / 1,014 ms | 42.5 / 44.5 ms | — | — |
+| Route A | 7.71 GPU-s per image (VLM p50 7.7 s + Laya p50 42 ms) | | | | |
+
+- Batch-1 latency is about 42–43 ms in every view: at batch 1 the cost is
+  overhead, not sequence length.
+- On CPU, batched (~984 ms per image) is slower than batch-1 (875 ms).
+  As measured.
+
+Cost per 1,000 images:
+
+| | GPU-seconds per 1k | vs Route A |
+|---|---|---|
+| Route A | 7,710 (2.1 GPU-hours) | 1x |
+| Laya-Vision combined, forward only | 15.3 | ~505x less |
+| Laya-Vision image-only, forward only | 3.0 | ~2,600x less |
+| Laya-Vision combined, end to end incl. precompute | ~121 s wall-clock + 15.3 | ~56x less |
+| Laya-Vision image-only, end to end (SigLIP ~31 + 3.0) | ~34 | ~230x less |
+
+- The end-to-end rows are the fair comparison, since Route A also starts
+  from the raw image. Precompute figures are the Phase 2 L4 measurements:
+  - 8.24 img/s end to end, bound by Tesseract on 12 CPU workers. That is
+    wall-clock time, not GPU-seconds.
+  - SigLIP alone ran at 32 img/s.
+- Image-only needs no OCR.
+
+### Gate 4 verdict: PASSED on every success criterion (CLAUDE.md)
+- **Beats majority decisively:** combined 0.862 vs 0.064 (13.4x).
+- **Beats Route A at a fraction of its cost:**
+  - Same ids: 0.873 vs 0.510 on the test subsample, 0.847 vs 0.501 on the
+    val comparison set.
+  - Cost: about 500x less GPU time for the forward, and about 56x less end
+    to end including OCR.
+- **Calibrated:** combined ECE 0.0145 after temperature scaling (0.0285
+  raw), well under 0.10. Every view is under 0.10 on every set, before and
+  after fitting.
+- **Generalises from val:**
+  - test combined 0.862 sits between the val comparison set (0.847) and
+    the val monitor set (0.872);
+  - image: 0.858 vs 0.846 / 0.859;
+  - text: 0.291 vs 0.306 / 0.304.
+- **The image carries the decision,** as at Gate 3: image-only (0.858) is
+  within 0.005 of combined, at a fifth of the GPU time and with no OCR.
+  Text-only (0.291, upstream Laya's path on OCR text) is far behind.
+
+Test is now closed. Nothing changes on the strength of these numbers
+(protocol §5).
+
+### Artifacts
+docs/final/ holds the following, copied from Drive:
+- final_results.json (phase4/final);
+- eval_val_final.json (the val comparison-set evaluation);
+- calibration.json (phase3/calibration);
+- confusion_<view>.png and reliability_<view>.png for the test run.
