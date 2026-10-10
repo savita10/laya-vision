@@ -15,7 +15,11 @@ dependencies = [
     "safetensors",
     "huggingface_hub",
     "numpy",
+    "pillow",
 ]
+
+[project.optional-dependencies]
+ocr = ["pytesseract"]  # plus the tesseract binary, for the combined image + OCR view
 
 [tool.setuptools]
 packages = ["laya_vision"]

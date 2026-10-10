@@ -1,87 +1,255 @@
-# Model card: Laya-Vision
+---
+license: apache-2.0
+base_model: convaiinnovations/laya
+datasets:
+  - aharley/rvl_cdip
+language:
+  - en
+pipeline_tag: image-classification
+tags:
+  - document-classification
+  - rvl-cdip
+  - laya
+  - siglip
+  - decision-model
+  - calibrated
+library_name: laya-vision
+metrics:
+  - accuracy
+model-index:
+  - name: laya-vision
+    results:
+      - task:
+          type: image-classification
+          name: Document-type classification (16 classes)
+        dataset:
+          name: RVL-CDIP (5,000-image stratified test subsample)
+          type: aharley/rvl_cdip
+        metrics:
+          - type: accuracy
+            value: 0.8624
+          - type: expected_calibration_error
+            value: 0.0145
+---
 
-## Comparison to published results
+# Laya-Vision
 
-RVL-CDIP document-type accuracy (16 classes), as published. Laya-Vision and
-Route A were evaluated in this work; every other row is copied from the
-cited source.
+Laya-Vision extends the open-source [Laya](https://huggingface.co/convaiinnovations/laya)
+decision model with an image input channel. Laya is a "System 1" model: it returns
+typed, calibrated decisions — a choice from a list, a score on a scale, or a yes/no
+probability — rather than text. Laya-Vision lets it make those decisions about a
+scanned document image. The shipped task is 16-class document-type classification
+on RVL-CDIP: **86.2% accuracy, calibration error 0.015, ~15 ms per page on an L4,
+under a second on CPU.**
 
-| Model | Accuracy (%) | Input | Test set | Source |
-|---|---|---|---|---|
-| Bi-VLDoc | 97.12 | image + text + layout | full RVL-CDIP test (40k) | Luo et al. 2022, via Larson et al. 2023, Table 1 |
-| ERNIE-Layout-large | 96.27 | image + text + layout | full RVL-CDIP test (40k) | Larson et al. 2023, Table 1 |
-| LayoutLMv3-large | 95.93 | image + text + layout | full RVL-CDIP test (40k) | Larson et al. 2023, Table 1 |
-| DocXClassifierFPN-XL | 94.19 | image only | full RVL-CDIP test (40k) | Saifullah et al. 2024 |
-| VGG-16 | 90.97 | image only | full RVL-CDIP test (40k) | Afzal et al. 2017 |
-| Harley et al. 2015 (the dataset paper) | 89.80 | image only | full RVL-CDIP test (40k) | Harley et al. 2015 |
-| **Laya-Vision (combined view)** | **86.24** | image + OCR text | **our 5,000-image stratified subsample of the RVL-CDIP test split** | this work |
-| Route A (Qwen2-VL-2B describe → Laya, zero-shot) | 51.0 | image (via generated description) | 1,000 images from our 5,000-image test subsample | this work |
+Code, training history and evaluation protocol: https://github.com/savita10/laya-vision
 
-**Laya-Vision is not evaluated on the full RVL-CDIP test split.** Its 86.24 is
-on a 5,000-image stratified subsample (about 313 images per class) of the
-40,000-image test split, scored once. The published rows use the full test
-split. Route A's 51.0 is on a pre-registered 1,000-image stratified subset of
-that 5,000-image subsample. On the same 1,000 images, Laya-Vision (combined)
-scores 87.3.
+## What this model does — and doesn't
 
-GPT-4-Vision is deliberately not listed: its reported 69.9 is on a 160 × 5
-subset, which is not comparable to the results above.
+**It does:** answer typed questions about a scanned document image. The shipped
+question is document type among 16 RVL-CDIP classes (letter, form, email,
+handwritten, advertisement, scientific report, scientific publication,
+specification, file folder, news article, budget, invoice, presentation,
+questionnaire, resume, memo), with a calibrated probability. It accepts image
+only, text only (OCR), or both; image-only is recommended. New typed questions can
+be asked at request time without retraining, but their accuracy is unmeasured.
 
-### Caveats
-1. **Training data.** Laya-Vision is trained on a 60,000-image stratified
-   subsample of RVL-CDIP train. The published models train on the full
-   320,000 images.
-2. **Model capacity and input.** Laya-Vision keeps both encoders frozen:
-   SigLIP base at 384 × 384 px for the image, and the Laya backbone for the
-   text. Only a 28M-parameter adapter is trained (projector + decision
-   head). The top published models are full fine-tunes, and the top three
-   also use layout features (OCR word positions).
-3. **Different objective.** Laya-Vision is built for calibrated typed
-   decisions at about 15 ms per page (L4, batched, model forward only). On
-   this test subsample it reaches ECE 0.0145 after temperature scaling.
-   Neither calibration nor cost is measured by the leaderboard, which
-   ranks top-1 accuracy alone.
+**It does not:** extract or read values — no invoice totals, dates, names or any
+text; it returns decisions, never free text. It does not know document types
+outside the 16 classes (others are forced into the nearest). It is trained on
+1960s–90s greyscale ~90-dpi scans, so modern colour PDFs, phone photos and
+screenshots are out of distribution. It is not a general image model; non-document
+images yield meaningless but confident-looking answers. It does not detect
+handwriting or judge legibility.
 
-### Label noise
-Larson et al. (2023) estimate that **8.1% of the RVL-CDIP test labels are
-wrong**, so the top leaderboard scores partly fit label noise. The same
-noise is in our test subsample, and it caps every model's measurable
-accuracy.
+### Where it fits
+Use it as the fast first stage of a document pipeline: classify and route every
+page in milliseconds, send low-confidence pages to a human, and run expensive
+OCR/VLM extraction only on the pages that need it. Thresholds are yours to set;
+the calibrated probabilities are what make that safe.
 
-### Planned for v1.1
-- Evaluate on the full 40,000-image RVL-CDIP test split, so the result is
-  directly comparable with the rows above.
-- Train on the full 320,000-image training split.
+## Intended use
 
-### References
-- Afzal, M. Z., Kölsch, A., Ahmed, S., & Liwicki, M. (2017). Cutting the
-  error by half: Investigation of very deep CNN and advanced training
-  strategies for document image classification. *Proceedings of the 14th
-  IAPR International Conference on Document Analysis and Recognition
-  (ICDAR 2017)*. arXiv:1704.03557.
-- Harley, A. W., Ufkes, A., & Derpanis, K. G. (2015). Evaluation of deep
-  convolutional nets for document image classification and retrieval.
-  *Proceedings of the 13th International Conference on Document Analysis
-  and Recognition (ICDAR 2015)*.
-- Huang, Y., Lv, T., Cui, L., Lu, Y., & Wei, F. (2022). LayoutLMv3:
-  Pre-training for document AI with unified text and image masking.
-  *Proceedings of the 30th ACM International Conference on Multimedia
-  (ACM MM 2022)*. Cited for the LayoutLMv3-large model; the 95.93 is
-  taken from Larson et al. (2023), Table 1.
-- Larson, S., Lim, G., & Leach, K. (2023). On evaluation of document
-  classification with RVL-CDIP. *Proceedings of the 17th Conference of
-  the European Chapter of the Association for Computational Linguistics
-  (EACL 2023)*.
-- Luo, C., et al. (2022). Bi-VLDoc: Bidirectional vision-language
-  modeling for visually-rich document understanding. arXiv preprint.
-  The 97.12 is taken from Larson et al. (2023), Table 1.
-- Peng, Q., et al. (2022). ERNIE-Layout: Layout knowledge enhanced
-  pre-training for visually-rich document understanding. *Findings of
-  the Association for Computational Linguistics: EMNLP 2022*. Cited for
-  the ERNIE-Layout-large model; the 96.27 is taken from Larson et al.
-  (2023), Table 1.
-- Saifullah, S., Agne, S., Dengel, A., & Ahmed, S. (2024).
-  DocXClassifier: Towards a robust and interpretable deep neural network
-  for document image classification. *International Journal on Document
-  Analysis and Recognition (IJDAR)*, 27(3), 447–473.
-  https://doi.org/10.1007/s10032-024-00483-w
+- Document-type routing and triage for scanned office/business paperwork
+  resembling RVL-CDIP (greyscale scans, standard business genres).
+- Pre-sorting before OCR/extraction; archive digitisation; intake automation
+  with a human-review threshold.
+- Research on calibrated multimodal decision models with frozen backbones.
+
+### Out-of-scope use
+- Reading or extracting content from documents.
+- Classifying document types outside the 16 classes, or non-document images.
+- Any use requiring reliability on modern colour documents, photos or
+  screenshots without prior validation on that data.
+- High-stakes automated decisions without a human-review threshold.
+
+## How to use
+
+```bash
+pip install laya==0.3.24 transformers==4.49.0 torch pillow huggingface_hub
+git clone https://github.com/savita10/laya-vision && cd laya-vision && pip install -e .
+python -c "from huggingface_hub import snapshot_download; snapshot_download('savita10/laya-vision', local_dir='release')"
+python scripts/demo.py --images ./my_scans --release release/ --out results.json
+```
+
+```python
+from laya_vision import VisionAgent
+agent = VisionAgent(release_dir="release")
+result = agent.predict(image="page.png", questions={
+    "doc_type": {"type": "choice", "instructions": "What type of document is this?",
+                 "criteria": ["letter", "form", "email", "handwritten", "advertisement",
+                              "scientific report", "scientific publication", "specification",
+                              "file folder", "news article", "budget", "invoice",
+                              "presentation", "questionnaire", "resume", "memo"]}})
+ans = result["answers"]["doc_type"]
+print(ans["choice"], ans["probabilities"][ans["choice"]])
+```
+
+**Input formats:** any Pillow-readable raster (PNG/JPEG/TIFF/BMP/WebP), path or
+PIL image, greyscale or colour, any size (letterboxed to 384×384 internally; OCR
+on the original). Render PDFs to images first (~150 dpi). Multi-page TIFF: first
+page only. The optional combined view needs Tesseract installed.
+
+## Release contents
+
+| File | Purpose |
+|---|---|
+| `laya_vision_config.json` | architecture, preprocessing (p2v1), sequence contract, classes, temperatures, SHA-256 of every weight file, provenance |
+| `calibration.json` | fitted temperatures and ECE before/after, tied to the weight hashes |
+| `weights/trainable.safetensors` | projector + decision head, 28.1M params, fp32 (112 MB) |
+| `weights/base/` | the Gate-0 fine-tuned Laya base (ModernBERT-large), 843 MB fp16 — shipped because the adapter was trained on it, not on the published upstream checkpoint |
+| `eval/final_results.json`, `eval/figures/` | the single test-set evaluation, confusion and reliability diagrams |
+
+The SigLIP encoder (`google/siglip-base-patch16-384`, revision `41aec1c8…`) is
+downloaded, not shipped.
+
+## Model architecture
+
+Frozen SigLIP-base-384 → 24×24 patch tokens, average-pooled to an 8×8 grid
+(64 tokens) → trained 2-layer MLP projector (768→1024, GELU) → inserted as
+placeholder slots at the start of Laya's state via a forward hook on the embedding
+layer → frozen ModernBERT-large encoder (d=1024, 512-token context) → trained
+decision head (option markers at `[MASK]` tokens, softmax over options).
+Input order is fixed: `[visual | OCR text | derived features | user text]`, one
+`[SEP]` after the visual block; text truncates first, visual tokens and options
+never. With `image=None` the model runs upstream Laya's exact tokenisation and
+forward pass on Laya-Vision's weights.
+
+Trainable parameters: projector 1.8M + decision head 26.2M = 28.1M of 423M.
+
+## Training data
+
+RVL-CDIP (Harley et al. 2015), Hugging Face `aharley/rvl_cdip` at revision
+`03f14a4a…`. Stratified subsamples drawn from the dataset's own splits:
+60,000 train / 5,000 val / 5,000 test, seed 20261003, SHA-256-pinned label files.
+A 200-image manual audit of train found 193 correct, 4 mislabeled (2%), 3
+unreadable (1.5%). RVL-CDIP is distributed for research use; this model inherits
+that context.
+
+## Training procedure
+
+- Base: the Gate-0 fine-tune of `convaiinnovations/laya` on LocalLLaMA/typed-decisions
+  (reproduced at 0.777 vs published 0.766).
+- Precompute (once): Tesseract 5.3.4 OCR on the original scan; auto-contrast →
+  bicubic resize (long side 384) → centre-pad white → SigLIP embeddings, stored
+  fp16 at 64 tokens.
+- Objective: upstream Laya's RLCD loss (proper scoring rules: log + spherical,
+  REINFORCE with group baseline), one-hot targets over 16 options.
+- Optimiser: AdamW, weight decay 0.01, head lr 1e-4, projector lr 3e-4, cosine
+  schedule with warmup, gradient clipping 1.0, effective batch 64, bf16 autocast
+  with encoder gradient checkpointing.
+- Modality dropout per example: 40% image+text / 30% image-only / 30% text-only.
+- Final run: 60,000 images × 3 epochs, 64 visual tokens (`run02_final`,
+  commit 38d5075). Ablations over visual tokens (8/32/64), projector lr and
+  modality mix are in `experiments.md`.
+
+## Evaluation protocol
+
+Pre-registered in `docs/phase4_protocol.md` before the test set was read.
+Temperatures fitted by NLL on 3,000 val images outside the comparison set; applied
+to the combined and image views; the text view is reported at T=1.0 (fitting made
+it slightly worse). The test split was read exactly once by `final_eval.py`.
+Route A (Qwen2-VL-2B describes the page → the same Laya base decides) was scored on
+a pre-registered 1,000-image test subsample.
+
+## Results
+
+| View | Test acc. (5,000) | ECE raw → cal. | Latency / image |
+|---|---|---|---|
+| combined | **0.862** | 0.029 → 0.015 | 15.3 ms batched · 43 ms batch-1 (L4) · 875 ms CPU |
+| image-only | 0.858 | 0.020 → 0.014 | 3.0 ms batched · 42 ms batch-1 (L4) |
+| text-only | 0.291 | 0.034 (T=1) | 15.6 ms batched |
+
+Same 1,000 test ids: Laya-Vision 0.873 vs Route A 0.510 (7.7 GPU-s/image).
+Val comparison set (2,000): 0.847 vs Route A 0.501. Majority class 0.064.
+
+Weakest classes (val): scientific report 0.67, form 0.72, letter 0.78,
+questionnaire 0.79, presentation 0.81. Strongest: email 0.97, resume 0.93,
+advertisement 0.92, handwritten 0.92.
+
+### Comparison to published results
+
+| Model (year) | Modality | RVL-CDIP test acc. |
+|---|---|---|
+| Bi-VLDoc (2022) | image + text + layout | 97.12 |
+| ERNIE-Layout-large (2022) | image + text + layout | 96.27 |
+| LayoutLMv3-large (2022) | image + text + layout | 95.93 |
+| DocXClassifierFPN-XL (2024) | image | 94.19 |
+| VGG-16 fine-tuned (2017) | image | 90.97 |
+| Harley et al. (2015) | image | 89.80 |
+| **Laya-Vision v1** | image (+ inert OCR text) | **86.24** (5,000-image subsample) |
+| Route A: describe → Laya | image via VLM text | 51.0 (1,000-image subsample) |
+
+Caveats: leaderboard models train on all 320,000 images and fine-tune hundreds of
+millions of parameters at full resolution, several with layout features;
+Laya-Vision trains a 28M adapter over a frozen encoder from a 64-token, 384-px
+summary of 60,000 images, and targets calibrated decisions at ~15 ms/page. Larson
+et al. (2023) estimate 8.1% label errors in the RVL-CDIP test split, so top
+leaderboard scores partly fit noise.
+
+## Limitations
+
+- OCR text is close to inert: ≤0.4 points over image-only; text-only (0.29)
+  barely exceeds an untrained head (0.26). Form vs questionnaire is the only
+  neighbourhood where image-only beats combined.
+- Weak on visually similar classes (report/publication, form/questionnaire,
+  letter/memo/email).
+- Domain-bound to RVL-CDIP-like scans; validate before any other use.
+- Results are on a 5,000-image stratified subsample of the 40,000-image test
+  split (full evaluation planned for v1.1).
+- `image=None` applies upstream Laya's fitted choice temperature (1.060); the
+  published text-view numbers use T=1.0. Both are recorded in the config.
+- Handwriting and legibility questions were explored and deferred.
+
+## Compute and environmental note
+
+Trained and evaluated on Google Colab (NVIDIA L4): ~10 GPU-hours for training and
+ablations, ~3 hours of precompute, ~2 hours of label-generation experiments —
+under 20 GPU-hours in total. Precompute is paid once; training never touches
+images.
+
+## Licence and credits
+
+Apache-2.0. See `NOTICE`. Built on Laya (Convai Innovations, Apache-2.0), SigLIP
+(Google, Apache-2.0), RVL-CDIP (Harley et al. 2015, research use) and Tesseract
+(Apache-2.0).
+
+## Citation
+
+```bibtex
+@software{laya_vision_2026,
+  title   = {Laya-Vision: an image input channel for the Laya decision model},
+  author  = {Savita},
+  year    = {2026},
+  url     = {https://github.com/savita10/laya-vision},
+  license = {Apache-2.0}
+}
+```
+
+References: Harley, Ufkes & Derpanis 2015 (ICDAR, pp. 991–995, doi
+10.1109/ICDAR.2015.7333910); Afzal et al. 2017 (ICDAR, vol. 1, pp. 883–888,
+arXiv:1704.03557); Larson, Lim & Leach 2023, *On Evaluation of Document
+Classification with RVL-CDIP* (EACL, pp. 2665–2678, doi
+10.18653/v1/2023.eacl-main.195); Saifullah et al. 2024 (IJDAR 27(3):447–473,
+doi 10.1007/s10032-024-00483-w); Zhai, Mustafa, Kolesnikov & Beyer 2023, *Sigmoid
+Loss for Language Image Pre-Training* (ICCV, pp. 11975–11986, arXiv:2303.15343).

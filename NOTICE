@@ -1,0 +1,42 @@
+Laya-Vision
+Copyright 2026 Savita
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this work except in compliance with the License. You may obtain a copy of the
+License at http://www.apache.org/licenses/LICENSE-2.0.
+
+This product includes and builds upon the following third-party works:
+
+1. Laya — Convai Innovations
+   https://huggingface.co/convaiinnovations/laya
+   Licensed under the Apache License 2.0.
+   Laya-Vision extends Laya's decision model, training objective (RLCD) and
+   request/response interface. The shipped base weights (weights/base/) are a
+   fine-tune of the Laya checkpoint on the LocalLLaMA/typed-decisions dataset,
+   produced by the upstream fine-tuning recipe. No files in the Laya package
+   are modified.
+
+2. SigLIP — google/siglip-base-patch16-384, Google
+   https://huggingface.co/google/siglip-base-patch16-384
+   Licensed under the Apache License 2.0.
+   Used unmodified as a frozen vision encoder; downloaded at runtime, not
+   redistributed here.
+
+3. ModernBERT — Answer.AI / LightOn (encoder architecture used by Laya)
+   Licensed under the Apache License 2.0.
+
+4. RVL-CDIP dataset — Harley, Ufkes and Derpanis (2015)
+   https://huggingface.co/datasets/aharley/rvl_cdip
+   "Evaluation of Deep Convolutional Nets for Document Image Classification and
+   Retrieval", ICDAR 2015. Derived from the IIT-CDIP Test Collection (Legacy
+   Tobacco Document Library). Distributed for research use; the trained weights
+   in this release inherit that context. No images from the dataset are
+   redistributed here.
+
+5. Tesseract OCR — Google and contributors
+   Licensed under the Apache License 2.0. Used at runtime for the optional
+   text channel; not redistributed.
+
+6. Qwen2-VL-2B-Instruct — Alibaba Cloud
+   Licensed under the Apache License 2.0. Used only during development for the
+   Route A baseline and label-generation experiments; not part of the release.

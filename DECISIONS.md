@@ -778,7 +778,9 @@ checked 2026-10-10):
   nothing reads.
   - build_release.py --exclude-base <folder> leaves a folder out only if
     its model.safetensors is byte-identical to the base's.
-  - Whether to use it is the human's decision. Open.
+  - Decision (human, 2026-10-10): leave it out. The release was built with
+    --exclude-base checkpoint_latest; laya_vision_config.json records
+    this under base_folders_left_out.
 - run_config.json records the train shards' SigLIP, preprocessing and OCR
   spec (identity.train). build_release.py reads them from there, not from
   the shards' own run_config.json.
