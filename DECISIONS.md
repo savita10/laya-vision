@@ -474,8 +474,8 @@ comparison set), one temperature per view, upstream fitter:
 
 | View | Fitted T | ECE before | ECE after | Cross-fit ECE |
 |---|---|---|---|---|
-| combined | 1.108 | 0.025 | 0.022 | not reported here |
-| image | 1.068 | 0.023 | 0.011 | not reported here |
+| combined | 1.108 | 0.025 | 0.022 | 0.0227 |
+| image | 1.068 | 0.023 | 0.011 | 0.0128 |
 | text | 1.039 | 0.031 | 0.039 | 0.035 |
 
 Reading:

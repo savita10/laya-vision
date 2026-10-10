@@ -48,12 +48,13 @@ Fitted on the 3,000-image val monitor pool, run02_final:
 
 | View | Fitted T | ECE before | ECE after | Cross-fit ECE | Applied T |
 |---|---|---|---|---|---|
-| combined | 1.108 | 0.025 | 0.022 | — | **1.108** |
-| image | 1.068 | 0.023 | 0.011 | — | **1.068** |
+| combined | 1.108 | 0.025 | 0.022 | 0.0227 | **1.108** |
+| image | 1.068 | 0.023 | 0.011 | 0.0128 | **1.068** |
 | text | 1.039 | 0.031 | 0.039 | 0.035 | **1.0** (raw) |
 
-- The cross-fit ECE was not given for combined and image ("—"); it is in
-  `calibration.json`.
+- Cross-fit ECE (fit on one half of the pool, score the other) confirms
+  the gains out of sample for combined (0.025 → 0.0227) and image
+  (0.023 → 0.0128), and the loss for text (0.031 → 0.035).
 - **Combined and image** are reported with their fitted temperatures.
 - **Text** is reported at T = 1.0. Fitting made the weak text view worse,
   both in-sample (0.031 → 0.039) and in the cross-fit estimate (0.035).
