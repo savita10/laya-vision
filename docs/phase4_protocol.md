@@ -42,10 +42,34 @@ change shows. Code: `scripts/calibrate.py`, `scripts/eval_vision.py`,
 - **Frozen once written.** Temperatures are fixed before the test run and are
   not refitted after it.
 
+### Fitted temperatures (2026-10-10; DECISIONS.md "P4 calibration recorded")
+
+Fitted on the 3,000-image val monitor pool, run02_final:
+
+| View | Fitted T | ECE before | ECE after | Cross-fit ECE | Applied T |
+|---|---|---|---|---|---|
+| combined | 1.108 | 0.025 | 0.022 | — | **1.108** |
+| image | 1.068 | 0.023 | 0.011 | — | **1.068** |
+| text | 1.039 | 0.031 | 0.039 | 0.035 | **1.0** (raw) |
+
+- The cross-fit ECE was not given for combined and image ("—"); it is in
+  `calibration.json`.
+- **Combined and image** are reported with their fitted temperatures.
+- **Text** is reported at T = 1.0. Fitting made the weak text view worse,
+  both in-sample (0.031 → 0.039) and in the cross-fit estimate (0.035).
+  - `vision.UNCALIBRATED_VIEWS` applies this in `eval_vision.py` and
+    `final_eval.py`.
+  - Both record the fitted and the applied temperatures.
+- The two ECE implementations agree: combined 0.0250 vs harness 0.0251.
+- **Every view is already well calibrated before fitting** (ECE ≤ 0.031,
+  under the 0.10 criterion). Temperature scaling makes small changes here,
+  not a rescue.
+
 ## 3. Metrics
 
 Every metric below is reported per view, raw (T = 1) and calibrated, except
-where noted.
+where noted. "Calibrated" means the applied temperatures in §2, so for the
+text view calibrated = raw.
 
 | Metric | Definition |
 |---|---|
@@ -158,4 +182,5 @@ fine-tuned checkpoint **ECE 0.213**, measured with the same harness we
 ported. Our 0.143 is below that.
 
 **Conclusion.** The gap was a comparison between two different measurements,
-not an ECE implementation error.
+not an ECE implementation error. This is now confirmed on our data: on the val monitor pool the
+two implementations give 0.0250 and 0.0251 for the combined view (raw).

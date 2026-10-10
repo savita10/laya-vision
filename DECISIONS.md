@@ -467,3 +467,35 @@ implementation difference.
   different checkpoint, dataset and aggregation.
 - The README's like-for-like row (laya-typed-decisions, same harness) is
   ECE 0.213. Our Gate-0 0.143 is below it.
+
+## 2026-10-10 — P4 calibration recorded
+calibrate.py on run02_final, val monitor pool (3,000 val images outside the
+comparison set), one temperature per view, upstream fitter:
+
+| View | Fitted T | ECE before | ECE after | Cross-fit ECE |
+|---|---|---|---|---|
+| combined | 1.108 | 0.025 | 0.022 | not reported here |
+| image | 1.068 | 0.023 | 0.011 | not reported here |
+| text | 1.039 | 0.031 | 0.039 | 0.035 |
+
+Reading:
+- run02_final is already well calibrated raw: every view is under the 0.10
+  criterion before fitting.
+- The fitted temperatures are slightly above 1, so the model is mildly
+  over-confident.
+- For the text view, fitting raised ECE both in-sample and out-of-sample.
+  The text view is weak (0.304 accuracy at Gate 3), and one scalar does not
+  improve its reliability.
+
+Decision:
+- Combined and image are reported with their fitted temperatures.
+- Text is reported at T = 1.0.
+- Implemented as vision.UNCALIBRATED_VIEWS = ("text",). eval_vision.py and
+  final_eval.py apply it and record the fitted and applied temperatures.
+- docs/phase4_protocol.md §2 is updated before any test run.
+
+Phase 0 ECE question closed: the measurement was correct.
+- The two ECE implementations agree on the combined view: 0.0250 (ours)
+  vs 0.0251 (upstream harness).
+- The 0.143 vs ~0.08 gap was a comparison of different quantities
+  (DECISIONS.md 2026-10-10, "P4 tooling and protocol").

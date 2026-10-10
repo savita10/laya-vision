@@ -13,7 +13,8 @@ truncation count, and Laya-Vision forward cost (GPU-seconds/image at
 
 --temperatures calibration.json (scripts/calibrate.py, fitted on the val
 monitor pool, never on these ids) adds a "calibrated" block per view:
-softmax(logits / T_view). Raw metrics stay at the top level of each view.
+softmax(logits / T_view). The text view is reported at T = 1.0
+(vision.UNCALIBRATED_VIEWS; DECISIONS.md 2026-10-10). Raw metrics stay at the top level of each view.
 A scalar T > 0 does not change the argmax, so accuracy, per-class accuracy
 and the confusion matrix are the same raw or calibrated.
 
@@ -91,7 +92,9 @@ def main():
         if missing:
             raise SystemExit(f"{args.temperatures} has no temperature for views {missing}.")
         calibration = {"path": str(args.temperatures), "sha256": vision.sha256_file(args.temperatures),
-                       "temperatures": temperatures, "fitted_on": cal["fitted_on"]["pool"],
+                       "temperatures": temperatures, "fitted_temperatures": cal["temperatures"],
+                       "policy": f"views {list(vision.UNCALIBRATED_VIEWS)} at T = 1.0 (DECISIONS.md 2026-10-10)",
+                       "fitted_on": cal["fitted_on"]["pool"],
                        "fitted_n": cal["fitted_on"]["n"]}
     model.to(device).eval()
 

@@ -8,7 +8,7 @@ into the new output, and the earlier file is kept (renamed), never overwritten.
 
 Scores run02_final (--run-dir, --checkpoint) on the full test split, three
 views, raw and calibrated (--temperatures from calibrate.py, fitted on the
-val monitor pool). Per view: accuracy, NLL, Brier, ECE (ours and the upstream
+val monitor pool; the text view at T = 1.0, vision.UNCALIBRATED_VIEWS). Per view: accuracy, NLL, Brier, ECE (ours and the upstream
 harness's), mean confidence, per-class and per-neighbourhood accuracy, 16x16
 confusion matrix (JSON + PNG), reliability bins, and cost: GPU-seconds/image
 batched, batched latency p50/p95 (per batch and per image) and batch-1
@@ -291,7 +291,9 @@ def main():
         "checkpoint": {**{k: v for k, v in run_info.items() if k != "train_identity"}, "visual_tokens": tokens,
                        "max_len": max_len, "base_model_sha256": base_sha},
         "calibration": {"path": str(args.temperatures), "sha256": vision.sha256_file(args.temperatures),
-                        "temperatures": temperatures, "fitted_on": cal["fitted_on"]["pool"],
+                        "temperatures": temperatures, "fitted_temperatures": cal["temperatures"],
+                        "policy": f"views {list(vision.UNCALIBRATED_VIEWS)} at T = 1.0 (DECISIONS.md 2026-10-10)",
+                        "fitted_on": cal["fitted_on"]["pool"],
                         "fitted_n": cal["fitted_on"]["n"]},
         "classes": rvlcdip.CLASSES, "counts_per_class": dict(counts),
         "majority_class_floor": max(counts.values()) / len(data),

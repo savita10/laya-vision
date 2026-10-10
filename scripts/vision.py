@@ -681,15 +681,22 @@ def metrics(probs, labels, bins=15):
     return res
 
 
+# Views reported at T = 1.0 even though calibrate.py fits them (DECISIONS.md 2026-10-10,
+# "P4 calibration"): fitting raised the text view's ECE (0.031 -> 0.039, cross-fit 0.035).
+UNCALIBRATED_VIEWS = ("text",)
+
+
 def load_temperatures(path, trainable_sha256, tokens):
-    """calibration.json -> {view: T}; refuses a file fitted on another checkpoint or token count."""
+    """calibration.json -> ({view: applied T}, calibration dict); refuses a file fitted on another
+    checkpoint or token count. Views in UNCALIBRATED_VIEWS get T = 1.0; the fitted values are
+    in cal["temperatures"] and are reported next to the applied ones."""
     with open(path, encoding="utf-8") as f:
         cal = json.load(f)
     src = cal["checkpoint"]
     if src["trainable_sha256"] != trainable_sha256 or src["visual_tokens"] != tokens:
         raise SystemExit(f"{path} was fitted on another checkpoint (trainable sha256 {src['trainable_sha256'][:12]}, "
                          f"{src['visual_tokens']} tokens); refit with calibrate.py.")
-    return {view: float(v) for view, v in cal["temperatures"].items()}, cal
+    return {view: 1.0 if view in UNCALIBRATED_VIEWS else float(v) for view, v in cal["temperatures"].items()}, cal
 
 
 def load_run(base_ckpt, run_dir=None, checkpoint="final"):
