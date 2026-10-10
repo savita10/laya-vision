@@ -570,8 +570,9 @@ def lr_lambda(total_steps, warmup_steps, base_lr, eta_min=1e-6):
 # --- evaluation -------------------------------------------------------------------
 
 @torch.no_grad()
-def predict(model, data, builder, modality, device, batch_size=64, amp=None, rows=None):
-    """-> (probs [n, 16] float32, rows, seconds, truncated count). No temperature (P4)."""
+def predict_logits(model, data, builder, modality, device, batch_size=64, amp=None, rows=None, batch_times=None):
+    """-> (choice logits [n, 16] float32, rows, seconds, truncated count). Raw: no temperature.
+    batch_times, if a list, gets each batch's synchronised forward seconds appended."""
     model.eval()
     rows = list(range(len(data))) if rows is None else list(rows)
     out = np.zeros((len(rows), len(rvlcdip.CLASSES)), dtype=np.float32)
@@ -585,9 +586,69 @@ def predict(model, data, builder, modality, device, batch_size=64, amp=None, row
         with autocast(device, amp):
             logits, _ = forward(model, batch, device)
         sync(device)
-        seconds += time.perf_counter() - t0
-        out[start:start + len(items)] = torch.softmax(logits.float(), -1).cpu().numpy()
+        dt = time.perf_counter() - t0
+        seconds += dt
+        if batch_times is not None:
+            batch_times.append(dt)
+        out[start:start + len(items)] = logits.float().cpu().numpy()
     return out, rows, seconds, truncated
+
+
+def predict(model, data, builder, modality, device, batch_size=64, amp=None, rows=None):
+    """-> (probs [n, 16] float32, rows, seconds, truncated count). Raw: no temperature."""
+    logits, rows, seconds, truncated = predict_logits(model, data, builder, modality, device, batch_size, amp, rows)
+    return softmax_t(logits), rows, seconds, truncated
+
+
+def softmax_t(logits, temperature=1.0):
+    """softmax(logits / T) in float64, returned as float32 (as the Agent: z / T, then softmax)."""
+    z = np.asarray(logits, dtype=np.float64) / float(temperature)
+    z = z - z.max(1, keepdims=True)
+    p = np.exp(z)
+    return (p / p.sum(1, keepdims=True)).astype(np.float32)
+
+
+def ece_upstream_harness(probs, labels, bins=15):
+    """ECE exactly as scripts/eval_upstream.py (Kaggle notebook cell 14) computes it for a choice
+    question, fed what laya.Agent.predict returns (laya 0.3.24 agent.py _decode_answers):
+      - choice = argmax of the unrounded distribution;
+      - "probabilities" rounded to 4 decimals; the harness reads them back (.get(k, 1e-6)
+        for missing keys; all 16 are present here) and renormalises;
+      - conf = max of that; ece_score(conf, correct) with 15 bins.
+    The binning function is the same laya.common.ece_score as metrics()' ece_15bin; what
+    differs is only the rounding. The harness pools noul/score/choice questions on
+    typed-decisions, which a single-choice task does not have."""
+    from laya.common import ece_score
+
+    labels = np.asarray(labels)
+    choice = probs.argmax(1)
+    rounded = np.array([[round(float(v), 4) for v in row] for row in probs], dtype=np.float64)
+    p = rounded / rounded.sum(1, keepdims=True)
+    return float(ece_score(p.max(1), (choice == labels).astype(float), bins))
+
+
+def reliability_bins(probs, labels, bins=15):
+    """Per-bin (lo, hi, n, mean confidence, accuracy) with laya.common.ece_score's binning:
+    first bin [0, 1/bins], the others (lo, hi]."""
+    labels = np.asarray(labels)
+    conf = probs.max(1).astype(np.float64)
+    correct = (probs.argmax(1) == labels).astype(float)
+    edges = np.linspace(0, 1, bins + 1)
+    out = []
+    for i, (lo, hi) in enumerate(zip(edges[:-1], edges[1:])):
+        sel = (conf >= lo if i == 0 else conf > lo) & (conf <= hi)
+        out.append({"lo": float(lo), "hi": float(hi), "n": int(sel.sum()),
+                    "mean_confidence": float(conf[sel].mean()) if sel.any() else None,
+                    "accuracy": float(correct[sel].mean()) if sel.any() else None})
+    return out
+
+
+def confusion_matrix(probs, labels):
+    """16x16 counts, rows = true class, columns = predicted (rvlcdip.CLASSES order)."""
+    k = len(rvlcdip.CLASSES)
+    m = np.zeros((k, k), dtype=np.int64)
+    np.add.at(m, (np.asarray(labels), probs.argmax(1)), 1)
+    return m
 
 
 def metrics(probs, labels, bins=15):
@@ -604,6 +665,7 @@ def metrics(probs, labels, bins=15):
         "nll": float(-np.log(np.clip(probs[np.arange(len(labels)), labels], 1e-12, None)).mean()),
         "brier": float(((probs - onehot) ** 2).sum(1).mean()),
         "ece_15bin": float(ece_score(conf, correct.astype(float), bins)),
+        "ece_15bin_upstream_harness": ece_upstream_harness(probs, labels, bins),
         "mean_confidence": float(conf.mean()),
         "per_class_accuracy": {},
         "neighbourhood_accuracy": {},
@@ -617,6 +679,52 @@ def metrics(probs, labels, bins=15):
         if m.any():
             res["neighbourhood_accuracy"][hood] = float(correct[m].mean())
     return res
+
+
+def load_temperatures(path, trainable_sha256, tokens):
+    """calibration.json -> {view: T}; refuses a file fitted on another checkpoint or token count."""
+    with open(path, encoding="utf-8") as f:
+        cal = json.load(f)
+    src = cal["checkpoint"]
+    if src["trainable_sha256"] != trainable_sha256 or src["visual_tokens"] != tokens:
+        raise SystemExit(f"{path} was fitted on another checkpoint (trainable sha256 {src['trainable_sha256'][:12]}, "
+                         f"{src['visual_tokens']} tokens); refit with calibrate.py.")
+    return {view: float(v) for view, v in cal["temperatures"].items()}, cal
+
+
+def load_run(base_ckpt, run_dir=None, checkpoint="final"):
+    """Gate-0 base + a train_vision.py checkpoint -> (model, tok, cfg, base sha256, run_info, max_len, tokens).
+
+    run_dir None gives the untrained base (projector random: text view only)."""
+    model, tok, cfg, base_sha = load_base(base_ckpt)
+    run_info = {"run_dir": None, "checkpoint": None, "trainable_sha256": None}
+    max_len, tokens = MAX_LEN, N_VISUAL
+    if run_dir is not None:
+        run_dir = Path(run_dir)
+        with open(run_dir / "run_config.json", encoding="utf-8") as f:
+            run_cfg = json.load(f)
+        ident = run_cfg["identity"]
+        if ident["base_model_sha256"] != base_sha:
+            raise SystemExit("--base-ckpt is not the checkpoint this run was trained from (sha256 differs).")
+        max_len, tokens = ident["max_len"], ident["tokens"]
+        ckpt = run_dir / checkpoint / "trainable.safetensors"
+        load_trainable(model, ckpt)
+        run_info = {"run_dir": str(run_dir), "checkpoint": checkpoint, "trainable_sha256": sha256_file(ckpt),
+                    "train_identity": ident, "train_git_hash": run_cfg.get("script_git_hash")}
+    return model, tok, cfg, base_sha, run_info, max_len, tokens
+
+
+def batch1_latency(model, data, builder, view, device, amp, n):
+    """Batch-1 forward latency over the first n rows (first call dropped as warm-up)."""
+    import statistics
+
+    times = []
+    for row in range(min(n, len(data))):
+        _, _, seconds, _ = predict_logits(model, data, builder, view, device, 1, amp, rows=[row])
+        times.append(seconds)
+    times = times[1:] or times
+    q = statistics.quantiles(times, n=20) if len(times) >= 2 else times * 19
+    return {"n": len(times), "p50_ms": 1000 * statistics.median(times), "p95_ms": 1000 * q[18]}
 
 
 def autocast(device, amp):

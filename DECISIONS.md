@@ -432,3 +432,38 @@ Training note, for any future run:
   1.0 held it, and the loss kept falling.
 - The training worked, but steps were clipped hard for a whole epoch.
 - Next time, try a lower head lr (below 1e-4) and log the pre-clip norm.
+
+## 2026-10-10 — P4 tooling and protocol (docs/phase4_protocol.md)
+Built: scripts/calibrate.py, eval_vision.py --temperatures (calibrated
+metrics, confusion matrix JSON + PNG), scripts/final_eval.py, scripts/plots.py.
+The protocol was written before any test run.
+- Checkpoint: run02_final.
+- Temperatures: one per view, fitted with upstream's
+  laya.calibrate.fit_one_temperature (NLL, LBFGS, clamp [0.5, 5.0]) on val
+  outside the comparison set, never on comparison ids or test.
+- Metrics: raw and calibrated, ECE two ways (see below).
+- Route A on test: 1,000-image stratified subsample, seed 17, ids only,
+  drawn by final_eval.py and committed. Results are reported as-is.
+final_eval.py is the only script that reads test labels.
+- One touch: a started marker is written before any label is read, a
+  re-run is refused, and --force needs --reason (recorded, old files kept).
+- Every label-free check runs before the touch (checkpoint/temperature
+  identity, subsample hash, Route A outputs label-blind and complete).
+- --dry-run runs the pipeline on the val comparison set.
+Open, needs a decision: route_a.py has no label-blind test mode. Running
+Route A on the test subsample needs that mode plus a recorded exception
+(test images processed, labels never read), like 2026-10-07. Without it,
+the Route A comparison stays on the val comparison set.
+
+Phase 0 ECE question (ours 0.143 vs README ~0.08) resolved: not an
+implementation difference.
+- scripts/eval_upstream.py (Kaggle cell 14, verbatim) and vision.metrics
+  call the same laya.common.ece_score (15 equal-width bins on max p).
+- On typed-decisions the harness pools choice/noul/score confidences from
+  laya.Agent output (checkpoint temperatures, probabilities rounded to 4 dp).
+  For our single 16-way choice only the rounding differs; both are reported.
+- The README's 0.081 is "mean ECE 0.466 -> 0.081" for the base `laya`
+  checkpoint after per-(type, option count) refits on held-out data: a
+  different checkpoint, dataset and aggregation.
+- The README's like-for-like row (laya-typed-decisions, same harness) is
+  ECE 0.213. Our Gate-0 0.143 is below it.
