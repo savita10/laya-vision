@@ -27,7 +27,7 @@ must be val.jsonl; test is not read; --limit allowed), writing to
 
     python scripts/final_eval.py --dry-run --records <drive>/data/rvl_v1/val.jsonl --limit 200 ...
     python scripts/final_eval.py --base-ckpt <drive>/step5/laya_finetuned --run-dir <drive>/phase3/runs/run02 \\
-        --temperatures <drive>/phase4/calibration/calibration.json --shards-root <drive>/phase2/shards \\
+        --temperatures <drive>/phase3/calibration/calibration.json --shards-root <drive>/phase2/shards \\
         --records <drive>/data/rvl_v1/test.jsonl --route-a-outputs <drive>/phase4/route_a_test/route_a_outputs.jsonl \\
         --out-dir <drive>/phase4/final
 """

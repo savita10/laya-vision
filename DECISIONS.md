@@ -724,3 +724,82 @@ docs/final/ holds the following, copied from Drive:
 - eval_val_final.json (the val comparison-set evaluation);
 - calibration.json (phase3/calibration);
 - confusion_<view>.png and reliability_<view>.png for the test run.
+
+## 2026-10-10 — P5 release decisions
+Decision (human):
+1. **Base inside the release (option A).** The Gate-0 fine-tuned base ships
+   under weights/base/, unchanged. It is not the published
+   convaiinnovations/laya checkpoint (run02_final's frozen encoder is our
+   Phase 0 fine-tune), so it cannot be fetched from upstream.
+   - encoder/ ships as config only if its weight files duplicate
+     model.safetensors. The human confirms this from Drive.
+   - Finding: those files are never read either way. laya.common.build_model
+     takes only the config from encoder/ when the folder exists, and
+     load_base takes every weight from model.safetensors.
+   - build_release.py leaves them out only after checking they equal
+     model.safetensors' encoder tensors exactly (dtype, shape, values).
+     Otherwise it stops.
+2. **image=None keeps upstream's exact path,** including the base's
+   rl_agent_config.json temperatures. No file in the base is edited.
+   - The model card states that the published text-view numbers are at
+     T = 1.0 (protocol §2), while the SDK applies upstream's temperature,
+     and it reports both.
+   - Release.upstream_temperature gives the value laya.Agent applies.
+3. **fp32 as trained.** The config file is named laya_vision_config.json.
+4. **Model code moves into an installable package,** laya_vision/
+   (pyproject.toml, laya==0.3.24 pinned).
+   - laya_vision/model.py now holds VisionDecisionModel and _decide,
+     Projector, the embedding hook, and base and trainable loading.
+   - scripts/vision.py re-exports them, so scripts and tests are unchanged.
+     A plain clone still works without pip install, because vision.py puts
+     the repo root on sys.path.
+   - laya touch-points are unchanged (the 2026-10-08 list); only the file
+     moved.
+   - load_base no longer lets laya's tokenizer fix rewrite
+     tokenizer/tokenizer_config.json in place. When the fix is needed, it
+     runs on a temporary copy, so loading never writes into a checkpoint or
+     release folder.
+5. **The calibration folder is phase3/calibration.** The usage notes in
+   calibrate.py and final_eval.py are corrected.
+What the Drive base actually holds (release_inputs/base = step5/laya_finetuned,
+checked 2026-10-10):
+- model.safetensors: fp16, 421.3M params, 842.6 MB, sha256 a0914673… (the
+  base run02 trained from). load_base upcasts it to fp32, as in training.
+  trainable.safetensors: fp32, 28.1M params, 112.3 MB, sha256 ac98b183….
+- encoder/ holds config.json only (no weight files), so decision 1 needs no
+  comparison.
+- tokenizer/tokenizer_config.json was already rewritten by laya's in-place
+  fix on Drive ("PreTrainedTokenizerFast"). This is the file every Phase 3–4
+  run loaded, and it ships as it is. checkpoint_latest/ keeps the
+  pre-fix original ("TokenizersBackend").
+- checkpoint_latest/ is the Gate-0 fine-tune's last resume snapshot
+  (checkpoint_meta final: false). Its model.safetensors is byte-identical
+  to the base's, so shipping it would add a second 842.6 MB copy that
+  nothing reads.
+  - build_release.py --exclude-base <folder> leaves a folder out only if
+    its model.safetensors is byte-identical to the base's.
+  - Whether to use it is the human's decision. Open.
+- run_config.json records the train shards' SigLIP, preprocessing and OCR
+  spec (identity.train). build_release.py reads them from there, not from
+  the shards' own run_config.json.
+- run_config.json confirms what experiments.md assumed for run02_final:
+  commit 38d5075, lr_head 1e-4, effective batch 64 (micro-batch 16 ×
+  grad accumulation 4).
+Implementation:
+- laya_vision.load_release(path or Hub repo id) checks, before returning:
+  - format and laya versions;
+  - the sha256 of every file in the release;
+  - that the base and trainable weights are the ones the config and
+    calibration.json name;
+  - the projector's dimensions;
+  - that the applied temperatures follow from calibration.json and the
+    uncalibrated views (text -> 1.0).
+- scripts/build_release.py assembles release/ (gitignored) from the Drive
+  files and runs load_release on the result.
+- Verified on the CPU fixture:
+  - Release logits are exactly equal to load_run's in all three views.
+  - Loading leaves the folder byte- and mtime-identical.
+  - Each tampered or missing file is refused.
+  - Encoder weights: the duplicate case is left out; the differing case
+    stops the build.
+  - Equivalence tests 1–6 pass.

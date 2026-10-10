@@ -23,7 +23,7 @@ Outputs, in --out-dir:
   calibration_logits.npz     the pool's raw logits per view, ids and labels (refits need no GPU)
 
     python scripts/calibrate.py --base-ckpt <drive>/step5/laya_finetuned --run-dir <drive>/phase3/runs/run02 \\
-        --shards-root <drive>/phase2/shards --records <drive>/data/rvl_v1/val.jsonl --out-dir <drive>/phase4/calibration
+        --shards-root <drive>/phase2/shards --records <drive>/data/rvl_v1/val.jsonl --out-dir <drive>/phase3/calibration
 """
 
 import argparse

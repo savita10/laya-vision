@@ -6,3 +6,6 @@ shards/
 __pycache__/
 *.ipynb_checkpoints
 .venv/
+release/
+*.egg-info/
+release_inputs/
