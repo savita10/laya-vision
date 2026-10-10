@@ -246,7 +246,7 @@ GPU-hours.
 - `docs/` — dataset card, model card, phase designs, evaluation protocol, figures,
   final results
 - `splits/` — pre-registered comparison sets (val 2,000; test 1,000), SHA-guarded
-- `CLAUDE.md` — the project spec the coding agent worked from
+- `docs/PROJECT_SPEC.md` — the project spec the coding agent worked from
 - `DECISIONS.md` / `experiments.md` — the audit trail
 
 ## Credits and licence

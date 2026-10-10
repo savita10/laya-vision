@@ -9,3 +9,5 @@ __pycache__/
 release/
 *.egg-info/
 release_inputs/
+
+CLAUDE.md

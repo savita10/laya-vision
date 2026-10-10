@@ -1,4 +1,4 @@
-"""Phase 4 final evaluation: the ONLY script permitted to read test labels (CLAUDE.md).
+"""Phase 4 final evaluation: the ONLY script permitted to read test labels (docs/PROJECT_SPEC.md).
 
 Protocol: docs/phase4_protocol.md, written and committed before any test run.
 One touch: the run writes <out-dir>/final_results.json and refuses to start if

@@ -74,7 +74,7 @@ REPO = Path(__file__).resolve().parent.parent
 
 # p2v1: RGB -> autocontrast (cutoff 1%, tone-preserving) -> bicubic resize of the
 # long side to 384 -> centre pad with white to 384x384. Never change in place:
-# a new version gets a new id and a new output directory (CLAUDE.md).
+# a new version gets a new id and a new output directory (docs/PROJECT_SPEC.md).
 # Approved DECISIONS.md 2026-10-07.
 PREPROCESS_VERSION = "p2v1"
 IMAGE_SIZE = 384

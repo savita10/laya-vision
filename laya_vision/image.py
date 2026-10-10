@@ -24,7 +24,7 @@ def open_image(image):
     """Path, bytes or PIL image -> decoded PIL image, as stored (no resize, no mode change).
 
     Multi-page files give their first page. An unreadable image raises ImageError; there is no
-    silent text-only fallback (CLAUDE.md, failure rules).
+    silent text-only fallback (docs/PROJECT_SPEC.md, failure rules).
     """
     from PIL import Image, UnidentifiedImageError
 
