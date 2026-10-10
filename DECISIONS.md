@@ -831,3 +831,43 @@ Documentation, decided at the same time:
   image=None uses the base's max_len of 1024, while the published
   text-view numbers used 512. Results differ only for pages longer than
   ~460 OCR tokens.
+
+## 2026-10-10 — Backfill: Phase 0 Step 4 findings (2026-10-01, recorded late)
+This entry is a backfill. It records findings from 2026-10-01 (Phase 0,
+Step 4) that were not committed at the time. It is written on 2026-10-10
+from the Phase 0 notebook (notebooks/phase0_smoke_test.ipynb) and its
+saved outputs. It changes no later decision.
+
+Environment:
+- Local Python was abandoned: pip installs stalled in the OneDrive-synced
+  repo path. All compute is Colab-only from here.
+- Colab secrets: HF_TOKEN (Hugging Face) and GH_TOKEN (GitHub, for the
+  then-private repo).
+
+Laya interface, confirmed from laya/agent.py Agent._check_question. The
+published docs lagged the installed package, so the validator was the
+ground truth.
+- questions is a dict of question id -> definition.
+- "type" (choice / score / noul) and a non-empty "instructions" are
+  required.
+- choice:
+  - "criteria" is a list of scalar labels, or a dict of label ->
+    description;
+  - no null labels and no duplicates.
+- score:
+  - "criteria" is a list of level descriptions, index 0 first;
+  - described levels outperform bare numeric endpoints.
+- noul:
+  - "criteria" is optional;
+  - if given, its only keys are "true" and "false".
+
+Smoke test (Router.predict on a sample customer email, CPU):
+- category (choice): billing, 0.511.
+- urgency (score): level 3, "today", 0.875.
+- churn (noul): 0.157.
+- About 6.5 s on CPU.
+
+Observations:
+- The checkpoint loads with laya's invalid-temperatures warning: it ships
+  temperatures outside the allowed range, and laya clamps them.
+- act_probability is 1.0 on every answer (upstream issue #185).
