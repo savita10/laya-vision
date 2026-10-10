@@ -499,3 +499,36 @@ Phase 0 ECE question closed: the measurement was correct.
   vs 0.0251 (upstream harness).
 - The 0.143 vs ~0.08 gap was a comparison of different quantities
   (DECISIONS.md 2026-10-10, "P4 tooling and protocol").
+
+## 2026-10-10 — P4 error analysis (val comparison set, combined view)
+Source: eval_vision.py on run02_final, 2,000-image val comparison set,
+combined view (eval_val_final.json). Per-class accuracy:
+- Weakest: scientific report 0.672, form 0.724, letter 0.779,
+  questionnaire 0.786, presentation 0.815.
+- Strongest: email 0.968, resume 0.926, advertisement 0.921,
+  handwritten 0.918, specification 0.897.
+
+Finding: the errors are where earlier phases predicted, not new failure
+modes.
+- **Frozen embeddings:** the Gate 2 NN check's weakest classes were
+  scientific report 0.578, form 0.593, presentation 0.595, memo 0.631 and
+  letter 0.632. Four of those five are among the five weakest here. Training
+  lifts every class but keeps the order.
+- **Route A's confusion neighbourhoods:** the weak classes sit in them
+  (report/publication, form/questionnaire, letter/memo/email). Within a
+  neighbourhood, the strongest member (email 0.968) shows these are close
+  pairs, not unlearnable classes.
+- **Label noise:** form overlaps the P1 hand-audit's label-noise cluster
+  (structured business documents; 2 of the 4 mislabels were "form"). Part
+  of form's gap is likely label noise, not model error. That share is not
+  measured.
+- **Confidence pattern, to check:**
+  - The weakest classes are the ones where ambiguity is in the documents,
+    not just the model.
+  - So low confidence on them is the expected behaviour.
+  - Per-class reliability is not yet measured; it can be computed from
+    eval_val_final.predictions.jsonl.
+- **Neighbourhood accuracy** (the neighbourhood_accuracy block of
+  eval_val_final.json): not recorded yet. The file is on Drive and its
+  values were not in the request. To be added.
+Test is not involved: this is the val comparison set only.
