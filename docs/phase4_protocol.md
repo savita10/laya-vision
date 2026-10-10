@@ -103,20 +103,27 @@ text view calibrated = raw.
    monitor-set figure used at Gate 3, and adds the confusion matrix.
 3. **Dry run:** `final_eval.py --dry-run` (val comparison set; test not read)
    checks the full pipeline end to end.
-4. **Route A test subsample:** `final_eval.py --make-route-a-subsample` draws
+4. **Route A test subsample:** `route_a.py --make-comparison-set --records
+   test.jsonl --comparison-set splits/test_comparison_1000_seed17.json` draws
    **1,000 test images, stratified by class, seed 17**.
-   - It writes `splits/test_route_a_1000_seed17.json` with ids only, the
-     test.jsonl sha256 and no per-class counts. The file is committed
-     before Route A runs.
-   - Drawing it reads test labels to stratify, which is why
-     `final_eval.py` does it.
-5. **Route A on the test subsample:** `route_a.py`, label-blind. Its outputs
-   must carry no label fields; `final_eval.py` refuses outputs that do.
-   - **Not built yet.** `route_a.py` is val-only today. A test mode needs a
-     DECISIONS.md exception, like the 2026-10-07 precompute exception (test
-     images processed, labels never read).
-   - If it is not done, the test table reports Laya-Vision alone, and the
-     Route A comparison stays on val (step 2), stated as such.
+   - The file has the same format and sha256 guard as the val comparison
+     set: the test.jsonl sha256, per-class counts, ids and `"split":
+     "test"`.
+   - It is committed before Route A runs, and it is never regenerated
+     (the script refuses).
+5. **Route A on the test subsample:** `route_a.py --records test.jsonl
+   --comparison-set splits/test_comparison_1000_seed17.json`, under a
+   recorded exception (§5).
+   - It reads test labels to score the subsample, the same way it scores
+     the val set.
+   - It prints a notice and runs once: a complete test result in its
+     `--out-dir` refuses further runs. An interrupted run resumes with the
+     same manifest.
+   - `final_eval.py` scores Route A's outputs again with the same metric
+     code as Laya-Vision. Before the touch, it checks that the run's
+     manifest names this subsample (split, seed, n, test.jsonl sha256).
+     Afterwards, it checks that the outputs' labels agree with
+     test.jsonl.
 6. **The test run:** `final_eval.py` on test, **once**.
    - It scores the whole test split, three views, raw and calibrated.
    - It scores the same metrics on the Route A subsample, together with
@@ -126,8 +133,16 @@ text view calibrated = raw.
 
 ## 5. Rules
 
-- **Only `final_eval.py` reads test labels** (CLAUDE.md). Nothing else in
-  this protocol does.
+- **Test labels are read in exactly two places** (CLAUDE.md):
+  - `final_eval.py`, for Laya-Vision on the whole test split, once.
+  - `route_a.py`, only for the pre-registered 1,000-image test subsample
+    (`splits/test_comparison_1000_seed17.json`).
+    - This is a recorded exception (DECISIONS.md 2026-10-10, "Route A test
+      subsample"): Route A is the pre-registered external baseline, it is
+      run once, and it trains nothing.
+    - `route_a.py` refuses `--records test.jsonl` with any other
+      comparison set, and refuses the test subsample with val records.
+  - Nothing else in this protocol reads test labels.
 - **One touch.**
   - `final_eval.py` writes a started marker before reading any label, so a
     crash still counts as the touch.
@@ -148,7 +163,7 @@ text view calibrated = raw.
 - **Headline numbers:**
   - Test: combined-view accuracy and calibrated ECE.
   - Route A comparison: combined vs Route A on the 1,000-image test
-    subsample, or on the val comparison set if step 5 is not done.
+    subsample, reported next to the val comparison-set result (step 2).
 
 ## 6. The two ECE implementations (Phase 0 open question)
 

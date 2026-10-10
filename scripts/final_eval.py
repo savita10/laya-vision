@@ -14,17 +14,17 @@ confusion matrix (JSON + PNG), reliability bins, and cost: GPU-seconds/image
 batched, batched latency p50/p95 (per batch and per image) and batch-1
 latency p50/p95. Laya-Vision cost excludes precompute (SigLIP + Tesseract).
 
-Route A comparison: the same metrics on the fixed 1,000-image stratified test
-subsample (seed 17). The subsample is drawn once with --make-route-a-subsample
-(it needs test labels to stratify, hence here) and committed; it records the
-test.jsonl sha256 and holds ids only. Route A's own test outputs
-(--route-a-outputs, label-blind: no label fields allowed) are scored here.
+Route A comparison: the same metrics on the pre-registered 1,000-image
+stratified test subsample (seed 17), splits/test_comparison_1000_seed17.json,
+drawn once by route_a.py --make-comparison-set (recorded exception,
+DECISIONS.md 2026-10-10). Route A's test outputs (--route-a-outputs, from
+route_a.py's one test run) are scored here with the same metric code, and
+their label fields must agree with test.jsonl.
 
 --dry-run runs the whole pipeline on the val comparison set instead (records
 must be val.jsonl; test is not read; --limit allowed), writing to
 <out-dir>/dry_run/. It never counts as the touch.
 
-    python scripts/final_eval.py --make-route-a-subsample --records <drive>/data/rvl_v1/test.jsonl
     python scripts/final_eval.py --dry-run --records <drive>/data/rvl_v1/val.jsonl --limit 200 ...
     python scripts/final_eval.py --base-ckpt <drive>/step5/laya_finetuned --run-dir <drive>/phase3/runs/run02 \\
         --temperatures <drive>/phase4/calibration/calibration.json --shards-root <drive>/phase2/shards \\
@@ -33,7 +33,6 @@ must be val.jsonl; test is not read; --limit allowed), writing to
 """
 
 import argparse
-import hashlib
 import json
 import time
 from collections import Counter
@@ -46,20 +45,17 @@ import plots
 import rvlcdip
 import shards
 import vision
-from route_a import DEFAULT_COMPARISON_SET, load_comparison_set
+from route_a import DEFAULT_COMPARISON_SET, TEST_COMPARISON_N, TEST_COMPARISON_SEED, TEST_COMPARISON_SET, \
+    load_comparison_set
 
 REPO = Path(__file__).resolve().parent.parent
 PROTOCOL = REPO / "docs" / "phase4_protocol.md"
-SUBSAMPLE_SEED = 17
-SUBSAMPLE_N = 1000
-DEFAULT_SUBSAMPLE = REPO / "splits" / f"test_route_a_{SUBSAMPLE_N}_seed{SUBSAMPLE_SEED}.json"
-LABEL_FIELDS = ("label", "label_name", "label_int", "correct")
+SUBSAMPLE_SEED = TEST_COMPARISON_SEED
+SUBSAMPLE_N = TEST_COMPARISON_N
 
 
 def parse_args():
     p = argparse.ArgumentParser(description="Final, one-touch test evaluation of Laya-Vision")
-    p.add_argument("--make-route-a-subsample", action="store_true",
-                   help="draw the 1,000-image stratified test subsample (seed 17), write ids only, exit")
     p.add_argument("--base-ckpt")
     p.add_argument("--run-dir")
     p.add_argument("--checkpoint", default="final")
@@ -67,7 +63,7 @@ def parse_args():
     p.add_argument("--views", default="combined,image,text")
     p.add_argument("--shards-root")
     p.add_argument("--records", required=True, help="test.jsonl (val.jsonl with --dry-run)")
-    p.add_argument("--route-a-subsample", default=str(DEFAULT_SUBSAMPLE))
+    p.add_argument("--route-a-subsample", default=str(TEST_COMPARISON_SET))
     p.add_argument("--route-a-outputs", default=None, help="Route A route_a_outputs.jsonl on the test subsample")
     p.add_argument("--out-dir")
     p.add_argument("--force", action="store_true", help="run again although a result or started marker exists")
@@ -83,37 +79,15 @@ def parse_args():
     return p.parse_args()
 
 
-def sha256_text(lines):
-    return hashlib.sha256("\n".join(lines).encode()).hexdigest()
-
-
-def make_subsample(records_path, out_path):
-    out_path = Path(out_path)
-    if out_path.exists():
-        raise SystemExit(f"{out_path} exists; the subsample is drawn once and never regenerated.")
-    records = vision.read_records(records_path, "test")
-    picked = rvlcdip.stratified_sample(records, key=lambda r: r["label_int"], n=SUBSAMPLE_N, seed=SUBSAMPLE_SEED)
-    ids = sorted(r["id"] for r in picked)
-    vision.write_json_atomic(out_path, {
-        "description": "Fixed Route A / Laya-Vision test comparison subsample (docs/phase4_protocol.md). "
-                       "Ids only; never regenerate.",
-        "source": "test.jsonl from scripts/build_dataset.py",
-        "source_sha256": vision.sha256_file(records_path),
-        "seed": SUBSAMPLE_SEED, "n": len(ids), "stratified_by": "label_int",
-        "ids_sha256": sha256_text(ids), "ids": ids,
-    })
-    print(f"Wrote {out_path}: {len(ids)} test ids (stratified, seed {SUBSAMPLE_SEED}). Commit it before Route A "
-          "runs on test. Per-class counts are deliberately not written.")
-
-
 def load_subsample(path, records_path):
-    """The committed subsample; checks need only file hashes, no labels."""
+    """The pre-registered test subsample (route_a.py --make-comparison-set); checked by file hash only."""
     with open(path, encoding="utf-8") as f:
         sub = json.load(f)
+    if sub.get("split") != "test" or sub["seed"] != SUBSAMPLE_SEED or sub["n"] != SUBSAMPLE_N:
+        raise SystemExit(f"{path} is not the pre-registered test subsample ({SUBSAMPLE_N} test images, "
+                         f"seed {SUBSAMPLE_SEED}).")
     if sub["source_sha256"] != vision.sha256_file(records_path):
         raise SystemExit(f"{records_path} is not the test.jsonl the Route A subsample was drawn from.")
-    if sha256_text(sub["ids"]) != sub["ids_sha256"]:
-        raise SystemExit(f"{path}: ids do not match their hash.")
     return sub
 
 
@@ -172,13 +146,22 @@ def percentiles_ms(seconds):
     return {"n": int(len(s)), "p50_ms": float(np.percentile(s, 50)), "p95_ms": float(np.percentile(s, 95))}
 
 
-def read_route_a(path, sub_ids, label_blind=True):
-    """Route A outputs -> {id: row}, checked before the touch: label-blind, covering the subsample."""
+def read_route_a(path, sub, check_manifest=True):
+    """Route A outputs -> {id: row}, checked before the touch (no labels needed): the run's
+    route_a.manifest.json names this subsample, and the outputs cover every subsample id."""
+    path = Path(path)
+    if check_manifest:
+        manifest_path = path.parent / "route_a.manifest.json"
+        if not manifest_path.exists():
+            raise SystemExit(f"{manifest_path} missing: cannot tell which comparison set {path} was run on.")
+        with open(manifest_path, encoding="utf-8") as f:
+            cs = json.load(f)["comparison_set"]
+        if (cs.get("split"), cs["seed"], cs["n"], cs["source_sha256"]) != \
+                (sub["split"], sub["seed"], sub["n"], sub["source_sha256"]):
+            raise SystemExit(f"{manifest_path}: Route A ran on {cs}, not on this test subsample.")
+    sub_ids = sub["ids"]
     with open(path, encoding="utf-8") as f:
         rows = [json.loads(line) for line in f if line.strip()]
-    leaked = sorted({k for r in rows for k in LABEL_FIELDS if k in r})
-    if leaked and label_blind:
-        raise SystemExit(f"{path} carries label fields {leaked}; Route A test outputs must be label-blind.")
     by_id = {r["id"]: r for r in rows}
     missing = sorted(set(sub_ids) - set(by_id))
     if missing:
@@ -192,6 +175,9 @@ def score_route_a(by_id, sub_ids, label_of):
     for i in sub_ids:
         r = by_id[i]
         y = label_of[i]
+        if "label_name" in r and r["label_name"] != rvlcdip.CLASSES[y]:
+            raise SystemExit(f"Route A output {i} has label {r['label_name']!r}, test.jsonl says "
+                             f"{rvlcdip.CLASSES[y]!r}; the outputs are not from this test split.")
         labels.append(y)
         if r.get("error") is not None:
             errors += 1
@@ -212,14 +198,13 @@ def score_route_a(by_id, sub_ids, label_of):
     m["cost"] = {"gpu_seconds_per_image": float(np.mean(total)), "latency_total": percentiles_ms(total),
                  "latency_vlm": percentiles_ms(vlm_s), "latency_laya": percentiles_ms(laya_s)}
     m["note"] = ("Route A probabilities are laya.Agent's 4-decimal output with the Gate-0 checkpoint's own "
-                 "temperatures; no refit. Agent choice used for accuracy.")
+                 "temperatures; no refit. Agent choice used for accuracy. route_a.py also writes its own "
+                 "route_a_results.json; the numbers here use the same metric code as Laya-Vision.")
     return m
 
 
 def main():
     args = parse_args()
-    if args.make_route_a_subsample:
-        return make_subsample(Path(args.records), Path(args.route_a_subsample))
     for name in ("base_ckpt", "run_dir", "temperatures", "shards_root", "out_dir"):
         if getattr(args, name) is None:
             raise SystemExit(f"--{name.replace('_', '-')} is required.")
@@ -248,9 +233,10 @@ def main():
     else:
         split = "test"
         if not Path(args.route_a_subsample).exists():
-            raise SystemExit(f"{args.route_a_subsample} missing: draw it with --make-route-a-subsample first.")
+            raise SystemExit(f"{args.route_a_subsample} missing: draw it with route_a.py --make-comparison-set "
+                             "(--records test.jsonl) and commit it first.")
         sub = load_subsample(Path(args.route_a_subsample), records_path)
-        route_a = read_route_a(args.route_a_outputs, sub["ids"]) if args.route_a_outputs else None
+        route_a = read_route_a(args.route_a_outputs, sub) if args.route_a_outputs else None
         forced = one_touch_guard(out_dir, args.force, args.reason)  # last check: renames superseded files
     started = time.strftime("%Y-%m-%dT%H:%M:%S")
     if not args.dry_run:
@@ -268,7 +254,8 @@ def main():
                                            n=min(SUBSAMPLE_N, len(records)), seed=SUBSAMPLE_SEED)
         sub = {"ids": sorted(r["id"] for r in picked), "seed": SUBSAMPLE_SEED, "source_sha256": None,
                "note": "dry run: drawn from the val comparison set"}
-        route_a = read_route_a(args.route_a_outputs, sub["ids"], label_blind=False) if args.route_a_outputs else None
+        route_a = (read_route_a(args.route_a_outputs, sub, check_manifest=False)
+                   if args.route_a_outputs else None)
     elif not set(sub["ids"]) <= {r["id"] for r in records}:
         raise SystemExit(f"{args.route_a_subsample}: ids are not all in the test split.")
     label_of = {r["id"]: rvlcdip.CLASSES.index(r["label_name"]) for r in records}

@@ -532,3 +532,33 @@ modes.
   eval_val_final.json): not recorded yet. The file is on Drive and its
   values were not in the request. To be added.
 Test is not involved: this is the val comparison set only.
+
+## 2026-10-10 — Recorded exception: Route A reads test labels on the pre-registered test subsample
+Decision (human): route_a.py may read TEST labels, for scoring only, on the
+pre-registered 1,000-image test subsample. Route A is the pre-registered
+external baseline and runs once on that subsample.
+- Subsample: splits/test_comparison_1000_seed17.json, drawn by
+  route_a.py --make-comparison-set --records test.jsonl (stratified by
+  class, seed 17).
+  - Same format and sha256 guard as the val comparison set, plus
+    "split": "test".
+  - Committed before Route A runs; never regenerated.
+- route_a.py accepts --records test.jsonl ONLY when --comparison-set is
+  that file, and refuses the test subsample with val records.
+- Running on test prints a notice.
+- A complete test result in --out-dir refuses further runs. An
+  interrupted run resumes under the same manifest; --results-only
+  recomputes.
+- Nothing is trained or tuned on these labels. Route A is zero-shot, with
+  the same prompt (a2), VLM revision and Gate-0 Laya checkpoint as on val.
+Consequences:
+- CLAUDE.md test rule amended to name this exception alongside
+  final_eval.py.
+- docs/phase4_protocol.md §4–§5 updated before any test run.
+- Supersedes the "label-blind Route A" plan in the P4 tooling entry above.
+  final_eval.py no longer draws its own subsample (--make-route-a-subsample
+  removed) and no longer requires label-blind Route A outputs. Instead, before
+  the touch it checks that the Route A run's manifest names this subsample
+  (split, seed, n, test.jsonl sha256). After loading labels it checks that
+  the outputs' labels agree with test.jsonl. It scores Route A again with
+  the same metric code as Laya-Vision.

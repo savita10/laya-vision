@@ -9,8 +9,17 @@ the 16-class document-type choice. No model is trained for this baseline
 Evaluation runs on the FIXED comparison set: a stratified 2,000-image val
 subset, seed 11, stored in splits/val_comparison_2000_seed11.json. Laya-Vision
 is scored on the same ids later. The file records the sha256 of the val.jsonl
-it was drawn from, and this script refuses a different val.jsonl. Only val is
-accepted.
+it was drawn from, and this script refuses a different val.jsonl.
+
+Test (recorded exception, DECISIONS.md 2026-10-10 "Route A test subsample";
+docs/phase4_protocol.md): Route A is the pre-registered external baseline on
+the pre-registered test subsample, a stratified 1,000-image test subset, seed
+17, in splits/test_comparison_1000_seed17.json (sha256-guarded like the val
+set). --records test.jsonl is accepted ONLY with --comparison-set pointing at
+that file; this script then reads test labels to draw the subsample and to
+score it, prints a notice, and runs once: a complete test result in --out-dir
+refuses further runs (--results-only still recomputes it). Laya-Vision's test
+numbers come from final_eval.py only.
 
 Outputs, in --out-dir:
   route_a_outputs.jsonl    one line per image: description, Laya answer, timings
@@ -31,6 +40,10 @@ are reported as latency (p50/p95) and as GPU-seconds/image (mean).
     python scripts/route_a.py --records data/rvl_v1/val.jsonl --laya-dir <ckpt> --out-dir runs/route_a --limit 32
     python scripts/route_a.py --records data/rvl_v1/val.jsonl --laya-dir <ckpt> --out-dir runs/route_a
     python scripts/route_a.py --records data/rvl_v1/val.jsonl --out-dir runs/route_a --results-only
+    python scripts/route_a.py --records data/rvl_v1/test.jsonl --comparison-set splits/test_comparison_1000_seed17.json \
+        --make-comparison-set                                                          # once; commit it
+    python scripts/route_a.py --records data/rvl_v1/test.jsonl --comparison-set splits/test_comparison_1000_seed17.json \
+        --laya-dir <ckpt> --out-dir runs/route_a_test                                  # the one test run
 """
 
 import argparse
@@ -53,6 +66,16 @@ REPO = Path(__file__).resolve().parent.parent
 COMPARISON_SEED = 11
 COMPARISON_N = 2000
 DEFAULT_COMPARISON_SET = REPO / "splits" / f"val_comparison_{COMPARISON_N}_seed{COMPARISON_SEED}.json"
+# Pre-registered test subsample (docs/phase4_protocol.md; DECISIONS.md 2026-10-10).
+TEST_COMPARISON_SEED = 17
+TEST_COMPARISON_N = 1000
+TEST_COMPARISON_SET = REPO / "splits" / f"test_comparison_{TEST_COMPARISON_N}_seed{TEST_COMPARISON_SEED}.json"
+TEST_NOTICE = """
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!  TEST SPLIT: Route A reads TEST LABELS for the pre-registered 1,000-image   !!
+!!  test subsample (recorded exception, DECISIONS.md 2026-10-10). Runs once.   !!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+"""
 
 # Neutral: asks for layout and content, never for a document type, and names no class.
 # a1: first Route A prompt (never run).
@@ -87,17 +110,39 @@ def sha256_file(path):
 
 # --- comparison set -------------------------------------------------------------
 
-def make_comparison_set(records_path, records, out_path):
+def records_split(records):
+    splits = {r["split"] for r in records}
+    if splits not in ({"val"}, {"test"}):
+        raise SystemExit(f"--records must be val.jsonl or test.jsonl; found splits {sorted(splits)}.")
+    return splits.pop()
+
+
+def check_split_and_set(split, comparison_path):
+    """Test records only with the pre-registered test subsample; val never with it."""
+    is_test_set = comparison_path.resolve() == TEST_COMPARISON_SET.resolve()
+    if split == "test" and not is_test_set:
+        raise SystemExit(f"--records test.jsonl is allowed only with --comparison-set {TEST_COMPARISON_SET} "
+                         "(the pre-registered test subsample; DECISIONS.md 2026-10-10).")
+    if split == "val" and is_test_set:
+        raise SystemExit(f"{comparison_path} is the test subsample; it needs --records test.jsonl.")
+
+
+def make_comparison_set(records_path, records, out_path, split="val"):
     if out_path.exists():
         raise SystemExit(f"{out_path} exists; the comparison set is fixed and is never regenerated.")
-    picked = rvlcdip.stratified_sample(records, key=lambda r: r["label_int"], n=COMPARISON_N, seed=COMPARISON_SEED)
+    n, seed = (TEST_COMPARISON_N, TEST_COMPARISON_SEED) if split == "test" else (COMPARISON_N, COMPARISON_SEED)
+    picked = rvlcdip.stratified_sample(records, key=lambda r: r["label_int"], n=n, seed=seed)
     picked.sort(key=lambda r: r["image_index"])
     counts = Counter(r["label_name"] for r in picked)
+    description = ("Pre-registered Route A / Laya-Vision test subsample (docs/phase4_protocol.md; DECISIONS.md "
+                   "2026-10-10). Never regenerate." if split == "test" else
+                   "Fixed Route A / Laya-Vision comparison set (DECISIONS.md 2026-10-05). Never regenerate.")
     data = {
-        "description": "Fixed Route A / Laya-Vision comparison set (DECISIONS.md 2026-10-05). Never regenerate.",
-        "source": "val.jsonl from scripts/build_dataset.py",
+        "description": description,
+        "split": split,
+        "source": f"{split}.jsonl from scripts/build_dataset.py",
         "source_sha256": sha256_file(records_path),
-        "seed": COMPARISON_SEED,
+        "seed": seed,
         "n": len(picked),
         "counts_per_class": {name: counts.get(name, 0) for name in rvlcdip.CLASSES},
         "ids": [r["id"] for r in picked],
@@ -117,7 +162,10 @@ def load_comparison_set(path, records_path, records):
     actual = sha256_file(records_path)
     if actual != data["source_sha256"]:
         raise SystemExit(f"{records_path} has sha256 {actual}, but the comparison set was drawn from "
-                         f"{data['source_sha256']}; refusing to score a different val split.")
+                         f"{data['source_sha256']}; refusing to score a different split file.")
+    split = data.get("split", "val")  # the val set predates the field
+    if any(r["split"] != split for r in records):
+        raise SystemExit(f"{path} is a {split} comparison set; {records_path} is not {split}.jsonl.")
     by_id = {r["id"]: r for r in records}
     missing = [i for i in data["ids"] if i not in by_id]
     if missing:
@@ -346,8 +394,8 @@ def build_manifest(args, comparison, laya_hashes):
         "laya_checkpoint_sha256": laya_hashes,
         "state": "description text (plain string)",
         "question": QUESTION_ID,
-        "comparison_set": {"seed": comparison["seed"], "n": comparison["n"],
-                           "source_sha256": comparison["source_sha256"]},
+        "comparison_set": {"split": comparison.get("split", "val"), "seed": comparison["seed"],
+                           "n": comparison["n"], "source_sha256": comparison["source_sha256"]},
         "dataset": rvlcdip.DATASET_REPO,
         "dataset_revision": rvlcdip.DATASET_REVISION,
     }
@@ -355,7 +403,8 @@ def build_manifest(args, comparison, laya_hashes):
 
 def main():
     parser = argparse.ArgumentParser(description="Route A baseline: describe -> existing Laya, zero-shot")
-    parser.add_argument("--records", required=True, help="val.jsonl from build_dataset.py")
+    parser.add_argument("--records", required=True,
+                        help="val.jsonl; or test.jsonl with --comparison-set splits/test_comparison_1000_seed17.json")
     parser.add_argument("--comparison-set", default=str(DEFAULT_COMPARISON_SET))
     parser.add_argument("--make-comparison-set", action="store_true", help="draw and write the fixed set, then exit")
     parser.add_argument("--laya-dir", default=None, help="Gate-0 fine-tuned Laya checkpoint directory")
@@ -370,17 +419,25 @@ def main():
     args = parser.parse_args()
 
     records_path = Path(args.records)
-    records = read_jsonl(records_path)
-    if not records or any(r["split"] != "val" for r in records):
-        raise SystemExit("--records must be val.jsonl; Route A is scored on the val comparison set only.")
     comparison_path = Path(args.comparison_set)
+    records = read_jsonl(records_path)
+    if not records:
+        raise SystemExit(f"{records_path} is empty.")
+    split = records_split(records)
+    check_split_and_set(split, comparison_path)
+    if split == "test":
+        print(TEST_NOTICE, flush=True)
     if args.make_comparison_set:
-        make_comparison_set(records_path, records, comparison_path)
+        make_comparison_set(records_path, records, comparison_path, split)
         return
     comparison, selected = load_comparison_set(comparison_path, records_path, records)
     if args.out_dir is None:
         raise SystemExit("--out-dir is required.")
     out_dir = Path(args.out_dir)
+    if split == "test" and not args.results_only and (out_dir / "route_a_results.json").exists():
+        with open(out_dir / "route_a_results.json", encoding="utf-8") as f:
+            if json.load(f).get("complete"):
+                raise SystemExit(f"{out_dir} holds a complete Route A test result; the test subsample is run once.")
 
     if args.results_only:
         with open(out_dir / "route_a.manifest.json", encoding="utf-8") as f:
