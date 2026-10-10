@@ -394,3 +394,41 @@ injects visual tokens with a forward hook on the encoder's embeddings module
 and copies the post-encoder part of DecisionModel.forward. Touch-point 6:
 FastLaya, compiled and ONNX paths bypass the hook, and still must refuse
 images explicitly.
+
+## 2026-10-10 — Gate 3: PASSED — Phase 3 closed
+Gate: val accuracy well above majority class, near Route A.
+Phase 4 checkpoint: run02_final (final/ trainable weights of run02).
+
+Results (accuracy):
+
+| Model | Set | Combined | Image-only | Text-only |
+|---|---|---|---|---|
+| run02_final: 60k x 3 epochs, 64 tokens, lr_proj 3e-4, modality 40/30/30 | monitor | **0.872** | 0.859 | 0.304 |
+| run02 after epoch 1 / 2 / 3 | monitor | 0.815 / 0.853 / 0.872 | — | — |
+| run01_base | monitor | 0.849 | 0.842 | not recorded here |
+| Route A: Qwen2-VL-2B describe -> Gate-0 Laya, zero-shot | comparison set (2,000) | 0.501 | — | — |
+| Frozen SigLIP 1-NN, mean of tokens, 32-token view, leave-one-out | all val (5,000) | — | 0.756 | — |
+| Majority class | — | 0.0645 | 0.0645 | 0.0645 |
+
+"Monitor" is up to 1,000 val images outside the 2,000-image comparison set
+(train_vision.py epoch evaluation).
+
+Reading:
+- Combined beats majority by 13.5x. It exceeds Route A (+0.37) and the frozen
+  1-NN probe (+0.12). The gate is passed on both criteria.
+- Not yet like-for-like with Route A. The 0.872 is on the monitor images and
+  Route A's 0.501 on the comparison ids. The Gate 2 entry fixed that the
+  Route A comparison uses the trained model on the comparison ids, so
+  eval_vision.py on run02_final over the comparison set is the first Phase 4
+  step. The final table reports that number, not the monitor figure.
+- The image carries the decision: image-only 0.859 vs combined 0.872.
+  Text-only at 0.304 is weak. The head is shared across views, and OCR alone
+  separates RVL-CDIP classes poorly. Phase 4 reports all three views on the
+  comparison set.
+- run02 beats run01_base on combined (+0.023) and image-only (+0.017).
+
+Training note, for any future run:
+- In epoch 3 of run02 the pre-clip gradient norm was 100-400. Clipping at
+  1.0 held it, and the loss kept falling.
+- The training worked, but steps were clipped hard for a whole epoch.
+- Next time, try a lower head lr (below 1e-4) and log the pre-clip norm.
