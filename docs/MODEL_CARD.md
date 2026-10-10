@@ -52,7 +52,9 @@ handwritten, advertisement, scientific report, scientific publication,
 specification, file folder, news article, budget, invoice, presentation,
 questionnaire, resume, memo), with a calibrated probability. It accepts image
 only, text only (OCR), or both; image-only is recommended. New typed questions can
-be asked at request time without retraining, but their accuracy is unmeasured.
+be asked at request time without retraining, but their accuracy is unmeasured and
+their probabilities are returned uncalibrated (T = 1.0, `"calibrated": false` in
+the answer).
 
 **It does not:** extract or read values — no invoice totals, dates, names or any
 text; it returns decisions, never free text. It does not know document types
@@ -219,6 +221,9 @@ leaderboard scores partly fit noise.
   split (full evaluation planned for v1.1).
 - `image=None` applies upstream Laya's fitted choice temperature (1.060); the
   published text-view numbers use T=1.0. Both are recorded in the config.
+- With `image=None`, upstream's path uses the base model's max_len of
+  1024; the published text-view numbers used 512. Results differ only for
+  pages longer than ~460 OCR tokens.
 - Handwriting and legibility questions were explored and deferred.
 
 ## Compute and environmental note

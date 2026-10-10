@@ -10,6 +10,9 @@ With --release <dir> (downloads the pinned SigLIP on first run):
   5. image=None returns upstream laya.Agent's answer on the same weights: the scripts' text-view
      logits divided by the base's rl_agent_config temperature.
   6. A corrupt image raises ImageError.
+  7. With an image, a question other than the trained doc_type gets T = 1.0 and
+     "calibrated": false; the trained question (under any id) keeps its fitted temperature and
+     "calibrated": true; reordered options count as another question.
 
     python tests/test_sdk_equivalence.py [--release release]
 """
@@ -121,7 +124,7 @@ def test_release(release_dir):
                               torch.ones(1, len(built["markers"]), dtype=torch.bool), torch.zeros(1, dtype=torch.long),
                               visual=visual, visual_pos=torch.tensor([built["visual_pos"]]))
         view = "combined" if user_text else "image"
-        assert res["usage"]["view"] == view
+        assert res["usage"]["view"] == view and res["answers"]["doc_type"]["calibrated"] is True
         p = vision.softmax_t(logits.numpy(), agent.release.temperatures[view])[0]
         got = np.array([res["answers"]["doc_type"]["probabilities"][c] for c in cfg["doc_type"]["classes"]])
         assert np.abs(got - p).max() <= 5e-5 + 1e-12, np.abs(got - p).max()  # upstream rounds to 4 places
@@ -129,6 +132,32 @@ def test_release(release_dir):
         assert res["usage"]["truncated"] == (built["text_tokens_used"] < built["text_tokens"])
         print(f"ok  4 image path ({view}{', text truncated' if res['usage']['truncated'] else ''}) == scripts "
               f"forward at T={agent.release.temperatures[view]:.4f}: {res['answers']['doc_type']['choice']}")
+
+    # 7. untrained questions with an image: T = 1.0, calibrated false
+    classes = cfg["doc_type"]["classes"]
+    qs = {"kind": dict(q["doc_type"]),
+          "reordered": dict(q["doc_type"], criteria=classes[::-1]),
+          "is_memo": {"type": "noul", "instructions": "Is this a memo?"}}
+    res = agent.predict(None, qs, image=imgs[0])
+    assert res["answers"]["kind"]["calibrated"] is True and res["usage"]["temperatures"]["kind"] != 1.0
+    for qid in ("reordered", "is_memo"):
+        assert res["answers"][qid]["calibrated"] is False and res["usage"]["temperatures"][qid] == 1.0
+    one = agent.predict(None, {"r": qs["reordered"]}, image=imgs[0])
+    visual = torch.from_numpy(agent._visual(lv_image.letterbox(imgs[0])))[None]
+    b2 = vision.SequenceBuilder(agent.tok, {"t": "choice", "ins": q["doc_type"]["instructions"],
+                                            "crit": {c: "" for c in classes[::-1]}},
+                                max_len=cfg["max_len"], head_max_len=cfg["head_max_len"], n_visual=cfg["visual_tokens"])
+    built = b2.build(True)
+    ids = torch.tensor([built["ids"]])
+    with torch.no_grad():
+        logits, _ = model(ids, torch.ones_like(ids), torch.tensor([built["markers"]]),
+                          torch.ones(1, len(built["markers"]), dtype=torch.bool), torch.zeros(1, dtype=torch.long),
+                          visual=visual, visual_pos=torch.tensor([built["visual_pos"]]))
+    p = vision.softmax_t(logits.numpy(), 1.0)[0]
+    got = np.array([one["answers"]["r"]["probabilities"][c] for c in classes[::-1]])
+    assert np.abs(got - p).max() <= 5e-5 + 1e-12
+    print("ok  7 untrained questions with an image: T = 1.0, calibrated false; trained question under "
+          "another id: fitted T, calibrated true")
 
     # 5. image=None: upstream Agent on the same weights
     text = "MEMORANDUM\nTO: All staff\nFROM: Research\nRE: Budget review"

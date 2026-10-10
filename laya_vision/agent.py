@@ -5,11 +5,12 @@
   rl_agent_config.json value, as upstream.
 - image given: [CLS] head [SEP] [visual tokens | SEP | OCR text | user text] [SEP] at the release's
   max_len, options and visual tokens never truncated, text truncated from the end. The response
-  has upstream's shape; probabilities use the release's fitted temperature for the view
-  ("combined" when the sequence holds any text, else "image").
-
-The temperatures were fitted on the 16-class doc_type question. Other questions asked with an
-image get the same view temperature; their accuracy and calibration are not measured.
+  has upstream's shape plus "calibrated" on each answer (DECISIONS.md 2026-10-10, "SDK
+  temperatures for questions asked with an image"):
+  - the trained doc_type question (same type, instructions and 16 options in training order,
+    whatever its id) gets the release's fitted temperature for the view ("combined" when the
+    sequence holds any text, else "image"): "calibrated": true;
+  - any other question gets T = 1.0: "calibrated": false. Its accuracy is not measured.
 """
 
 import gc
@@ -56,6 +57,14 @@ class VisionAgent:
         """The trained question: 16 RVL-CDIP classes, in training order."""
         return {DOC_TYPE_ID: {"type": "choice", "instructions": DOC_TYPE_INSTRUCTIONS,
                               "criteria": list(self.config["doc_type"]["classes"])}}
+
+    def _is_trained(self, q):
+        """Internal question q is the trained doc_type question: the head the temperatures were fitted on."""
+        crit = q["crit"]
+        return (q["t"] == "choice" and q["ins"] == DOC_TYPE_INSTRUCTIONS and isinstance(crit, dict)
+                and list(crit) == list(self.config["doc_type"]["classes"])
+                and all(v in (None, "") for v in crit.values())
+                and "option_order" not in q and "labels" not in q)
 
     def predict(self, state=None, questions=None, image=None, ocr=False):
         """Typed answers in upstream laya's response shape.
@@ -133,7 +142,6 @@ class VisionAgent:
             ocr_text = self._ocr(img)  # the original image, full resolution
         text_ids = self._text_ids(state, ocr_text)
         view = "combined" if text_ids else "image"
-        temperature = self.release.temperatures[view]
 
         agent = self._agent
         ids = list(questions)
@@ -141,6 +149,8 @@ class VisionAgent:
             agent._check_question(qid, questions[qid])
         internal = {qid: agent._to_internal(questions[qid]) for qid in ids}
         items = self._items(ids, internal, text_ids)
+        calibrated = {qid: self._is_trained(internal[qid]) for qid in ids}
+        temperatures = {qid: self.release.temperatures[view] if calibrated[qid] else 1.0 for qid in ids}
         b = collate_items([items], self.tok.pad_token_id)
         n = len(items)
         vis = torch.from_numpy(np.ascontiguousarray(visual)).float()[None].expand(n, -1, -1)
@@ -153,11 +163,13 @@ class VisionAgent:
         logits = logits.float().cpu().numpy()
         act = torch.softmax(act.float(), -1).cpu().numpy()
         # upstream's decoder divides each row by its own temperature; pre-scale so it divides by ours.
-        for j, it in enumerate(items):
+        for j, (qid, it) in enumerate(zip(ids, items)):
             k = len(it["markers"])
             t_up = agent.temperature_by_options.get(temp_bucket(it["qtype"], k), agent.temperature[it["qtype"]])
-            logits[j, :k] *= t_up / temperature
+            logits[j, :k] *= t_up / temperatures[qid]
         answers = agent._decode_answers(logits, act, items, ids, internal, 0)
+        for qid in ids:
+            answers[qid]["calibrated"] = calibrated[qid]
 
         dropped = max(it["text_dropped"] for it in items)
         return {
@@ -172,7 +184,7 @@ class VisionAgent:
                 "truncated": dropped > 0,
                 "truncated_questions": [qid for qid, it in zip(ids, items) if it["text_dropped"]],
                 "view": view,
-                "temperature": temperature,
+                "temperatures": temperatures,
                 "ocr": ocr,
             },
         }

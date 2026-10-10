@@ -805,3 +805,29 @@ Implementation:
   - Encoder weights: the duplicate case is left out; the differing case
     stops the build.
   - Equivalence tests 1–6 pass.
+
+## 2026-10-10 — SDK temperatures for questions asked with an image
+Decision (human): with an image, only the trained question is calibrated.
+- The trained doc_type question keeps the fitted temperature of its view
+  (combined 1.1076 when the sequence holds any text, image 1.0683
+  otherwise). Its answer carries "calibrated": true.
+- Every other question asked with an image gets T = 1.0 (no
+  temperature), and its answer carries "calibrated": false. Its
+  accuracy is not measured.
+- The trained question is recognised by content, not by id: type choice,
+  the trained instructions, and the 16 classes in training order with no
+  descriptions, option_order or labels. Under any id it is calibrated.
+  With the options reordered, it counts as another question.
+- image=None is unchanged: upstream laya's path and response, with the
+  base's rl_agent_config.json temperatures and no "calibrated" key.
+- Implemented in laya_vision/agent.py. tests/test_sdk_equivalence.py
+  check 7 covers it.
+
+Documentation, decided at the same time:
+- DATASET_CARD.md moved to docs/DATASET_CARD.md, so the README's
+  repository map is accurate. Earlier entries here keep the old path, as
+  it was when they were written.
+- Limitations in README.md and docs/MODEL_CARD.md now state that
+  image=None uses the base's max_len of 1024, while the published
+  text-view numbers used 512. Results differ only for pages longer than
+  ~460 OCR tokens.

@@ -30,7 +30,8 @@ experiment and result recorded in this repository.
   adds under 0.5 points and costs 5× the batched latency.
 - You can ask new typed questions at request time without retraining — but
   accuracy on questions it was not trained on is **not measured** and must be
-  validated on your own data.
+  validated on your own data. Probabilities for untrained questions are
+  returned uncalibrated (T = 1.0, `"calibrated": false` in the answer).
 
 ### It does not
 - **Extract or read values.** It cannot tell you an invoice total, a date, a name,
@@ -200,6 +201,9 @@ Images whose long side is below ~384 px are upscaled and lose detail.
   in `release/laya_vision_config.json`.
 - **Test set:** results are on a 5,000-image stratified subsample of the
   40,000-image RVL-CDIP test split.
+- With `image=None`, upstream's path uses the base model's max_len of
+  1024; the published text-view numbers used 512. Results differ only for
+  pages longer than ~460 OCR tokens.
 - **Not a reader.** See *What it does — and doesn't*.
 
 ---
