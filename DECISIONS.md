@@ -562,3 +562,23 @@ Consequences:
   (split, seed, n, test.jsonl sha256). After loading labels it checks that
   the outputs' labels agree with test.jsonl. It scores Route A again with
   the same metric code as Laya-Vision.
+
+## 2026-10-10 — Route A test baseline: 0.510 on the pre-registered test subsample
+Route A ran once on splits/test_comparison_1000_seed17.json (1,000 test
+images, stratified, seed 17), under the recorded exception above. Setup was
+unchanged from val: Qwen2-VL-2B describe with prompt a2, the same VLM
+revision, and the Gate-0 fine-tuned Laya, zero-shot.
+
+| Route A | Set | Accuracy | Majority floor | VLM p50 | Laya p50 | GPU-s/image | Errors |
+|---|---|---|---|---|---|---|---|
+| val (2026-10-06) | val comparison set, 2,000, seed 11 | 0.501 | 0.0645 | 7.5 s | 41 ms | 7.6 | 0 |
+| **test** | test subsample, 1,000, seed 17 | **0.510** | 0.064 | 7.7 s | 42 ms | 7.71 | 0 |
+
+- Test agrees with val within sampling noise: +0.009, against a standard
+  error of about 0.016 at n = 1,000. Latency and cost also match val. The
+  val baseline was not a lucky or unlucky draw.
+- This is the Route A number for the test-table comparison (protocol §4
+  step 5). It is fixed and is not re-run.
+- Next and last: final_eval.py on test, once, with --route-a-outputs
+  pointing at this run's route_a_outputs.jsonl. It scores Route A again
+  with the same metric code and compares on the same 1,000 ids.
