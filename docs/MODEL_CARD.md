@@ -196,8 +196,8 @@ Weakest classes (val): scientific report 0.67, form 0.72, letter 0.78,
 questionnaire 0.79, presentation 0.81. Strongest: email 0.97, resume 0.93,
 advertisement 0.92, handwritten 0.92.
 
-![Headline accuracy](eval/figures/fig1_accuracy.png)
-![Latency](eval/figures/fig2_latency.png)
+![Headline accuracy](https://huggingface.co/savita10/laya-vision/resolve/main/eval/figures/fig1_accuracy.png)
+![Latency](https://huggingface.co/savita10/laya-vision/resolve/main/eval/figures/fig2_latency.png)
 
 ### Comparison to published results
 
