@@ -42,6 +42,7 @@ scanned document image. The shipped task is 16-class document-type classificatio
 on RVL-CDIP: **86.2% accuracy, calibration error 0.015, ~15 ms per page on an L4,
 ~2.2 s per page end-to-end on a laptop CPU.**
 
+Model (weights and this card): https://huggingface.co/savita10/laya-vision
 Code, training history and evaluation protocol: https://github.com/savita10/laya-vision
 
 ## What this model does — and doesn't
@@ -121,7 +122,7 @@ the local Tesseract version differs from training's 5.3.4 (text may differ sligh
 | `calibration.json` | fitted temperatures and ECE before/after, tied to the weight hashes |
 | `weights/trainable.safetensors` | projector + decision head, 28.1M params, fp32 (112 MB) |
 | `weights/base/` | the Gate-0 fine-tuned Laya base (ModernBERT-large), 843 MB fp16 — shipped because the adapter was trained on it, not on the published upstream checkpoint |
-| `eval/final_results.json`, `eval/figures/` | the single test-set evaluation, confusion and reliability diagrams |
+| `eval/final_results.json`, `eval/figures/` | the single test-set evaluation, confusion and reliability diagrams, and the two Results figures (`fig1_accuracy.png`, `fig2_latency.png`) |
 
 The SigLIP encoder (`google/siglip-base-patch16-384`, revision `41aec1c8…`) is
 downloaded, not shipped.
@@ -194,6 +195,9 @@ Val comparison set (2,000): 0.847 vs Route A 0.501. Majority class 0.064.
 Weakest classes (val): scientific report 0.67, form 0.72, letter 0.78,
 questionnaire 0.79, presentation 0.81. Strongest: email 0.97, resume 0.93,
 advertisement 0.92, handwritten 0.92.
+
+![Headline accuracy](eval/figures/fig1_accuracy.png)
+![Latency](eval/figures/fig2_latency.png)
 
 ### Comparison to published results
 

@@ -13,6 +13,8 @@ describe-the-image-then-decide alternative at ~500× the GPU cost.
 Built by one person on Google Colab in five gated phases, with every decision,
 experiment and result recorded in this repository.
 
+**Model on Hugging Face:** https://huggingface.co/savita10/laya-vision
+
 ---
 
 ## What this model does — and doesn't
