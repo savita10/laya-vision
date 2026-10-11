@@ -934,3 +934,52 @@ Also added:
 - A Tesseract version-warning note in both docs.
 - demo.py now prints progress with flush=True, so piped logs survive a
   kill.
+
+## 2026-10-11 — Gate 5: release, PASSED. Project v1 complete (v1.0.0)
+Laya-Vision v1 is released. This closes Phase 5 and the project's v1
+scope.
+
+### Release
+- **Code:** https://github.com/savita10/laya-vision, public. Release
+  tag v1.0.0 at 06d6a7e.
+- **Model:** https://huggingface.co/savita10/laya-vision, public,
+  Apache-2.0.
+  - Hub commit 820f010 uploaded release/ in full: 21 files plus
+    .gitattributes, 22 in all. Every size matched release/, and every LFS
+    file's sha256 matched.
+  - Hub commit f4de647 then re-uploaded README.md only, so the card's two
+    figures load from absolute Hub URLs. The card is byte-identical to
+    docs/MODEL_CARD.md at 06d6a7e.
+  - The Hub page renders the card, the model-index (accuracy 0.8624, ECE
+    0.0145) and both figures.
+
+### Gate 5 checks
+- **Public Cell A:** verified from a fresh Colab (reported by the human).
+- **Clean-clone demo:** verified. A fresh clone downloaded the 22 Hub
+  files and classified 20 images with 0 errors (reported by the human).
+- **Local test:** 0.864 image-only on the 1,000 unseen test-subsample
+  images on a laptop CPU, equal to the L4 (entry above).
+- **Secret scan:** gitleaks and a grep over the full git history found no
+  secrets. The only hits were false positives (sha256 hashes in
+  docs/route_a_results.json).
+
+### Final results (v1, from the Gate 4 entry)
+
+| Measure | Value |
+|---|---|
+| Test accuracy, combined (5,000-image stratified subsample) | **0.8624** |
+| Test accuracy, image-only / text-only | 0.8578 / 0.2906 |
+| Test ECE, combined, raw → calibrated | 0.0285 → **0.0145** |
+| Majority-class floor | 0.0644 |
+| Route A on the same 1,000 test ids | 0.510, vs Laya-Vision 0.873 combined / 0.864 image |
+| Route A on the val comparison set (2,000) | 0.501, vs Laya-Vision 0.847 |
+| GPU latency, L4, combined | 15.2 ms per image batched, 43 ms batch-1 |
+| GPU cost vs Route A | ~505x less for the forward, ~56x less end to end with OCR |
+| CPU latency, laptop, end to end | ~2.2 s per page, ~5 s with OCR |
+| Trainable parameters | 28.1M (projector + decision head), over a frozen Gate-0 Laya base and SigLIP |
+
+Every success criterion in docs/PROJECT_SPEC.md was met at Gate 4. Gate 5
+adds that the release reproduces those numbers outside the training
+environment.
+
+Any further change is a new version, recorded here first.
