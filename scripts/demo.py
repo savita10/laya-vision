@@ -62,7 +62,7 @@ def main():
         with open(out, encoding="utf-8") as f:
             results = {r["file"]: r for r in json.load(f)["results"] if "doc_type" in r}
     todo = [p for p in files if p.relative_to(folder).as_posix() not in results]
-    print(f"{len(files)} images, {len(files) - len(todo)} already in {out}; classifying {len(todo)}.")
+    print(f"{len(files)} images, {len(files) - len(todo)} already in {out}; classifying {len(todo)}.", flush=True)
 
     agent = VisionAgent(release_dir=args.release, device=args.device)
     questions = agent.doc_type_question()
@@ -78,14 +78,14 @@ def main():
         except ImageError as e:
             errors += 1
             results[rel] = {"file": rel, "error": str(e)}
-            print(f"{rel}: ERROR {e}")
+            print(f"{rel}: ERROR {e}", flush=True)
             continue
         ans = res["answers"]["doc_type"]
         results[rel] = {"file": rel, "doc_type": ans["choice"], "probability": ans["probabilities"][ans["choice"]],
                         "probabilities": ans["probabilities"], "view": res["usage"]["view"],
                         "truncated": res["usage"]["truncated"],
                         "ms": round((time.perf_counter() - t0) * 1000, 1)}
-        print(f"{rel}: {ans['choice']} ({ans['probabilities'][ans['choice']]:.3f})")
+        print(f"{rel}: {ans['choice']} ({ans['probabilities'][ans['choice']]:.3f})", flush=True)
         if i % 50 == 0:
             write_json_atomic(out, {"meta": meta, "results": list(results.values())})
     write_json_atomic(out, {"meta": meta, "results": [results[k] for k in sorted(results)]})

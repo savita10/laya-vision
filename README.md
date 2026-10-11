@@ -5,7 +5,7 @@
 model that returns typed, calibrated decisions instead of text) with an image
 input channel. Give it a scanned page and a typed question — a choice from a list,
 a score on a scale, or a yes/no probability — and it answers in ~15 ms per page on
-a modest GPU, or about a second on CPU, with a confidence you can set policy
+a modest GPU, or ~2.2 s end-to-end on a laptop CPU, with a confidence you can set policy
 against. The shipped task is 16-class document-type classification on RVL-CDIP:
 **86.2% test accuracy, calibration error 0.015**, versus 51% for the obvious
 describe-the-image-then-decide alternative at ~500× the GPU cost.
@@ -25,7 +25,8 @@ experiment and result recorded in this repository.
   letter, form, email, handwritten, advertisement, scientific report, scientific
   publication, specification, file folder, news article, budget, invoice,
   presentation, questionnaire, resume, memo), with calibrated confidence.
-- Fast: ~15 ms/page batched on an L4, ~43 ms single, ~1 s on CPU.
+- Fast: ~15 ms/page batched on an L4, ~43 ms single, ~2.2 s end-to-end on a
+  laptop CPU (~5 s with OCR).
 - Accepts image only, text only, or both. **Image-only is recommended** — OCR text
   adds under 0.5 points and costs 5× the batched latency.
 - You can ask new typed questions at request time without retraining — but
@@ -70,7 +71,7 @@ All numbers from a single pre-registered evaluation
 
 | System | Data | Accuracy | ECE (cal.) | Latency / image |
 |---|---|---|---|---|
-| **Laya-Vision, combined** | test, 5,000 | **0.862** | 0.015 | 15.3 ms batched · 43 ms batch-1 (L4) · 875 ms CPU |
+| **Laya-Vision, combined** | test, 5,000 | **0.862** | 0.015 | 15.3 ms batched · 43 ms batch-1 (L4) · ~2.2 s CPU end-to-end¹ |
 | Laya-Vision, image-only | test, 5,000 | 0.858 | 0.014 | 3.0 ms batched · 42 ms batch-1 (L4) |
 | Laya-Vision, text-only (OCR) | test, 5,000 | 0.291 | 0.034 | 15.6 ms batched |
 | Laya-Vision, combined | same 1,000 test ids as Route A | 0.873 | — | — |
@@ -79,6 +80,11 @@ All numbers from a single pre-registered evaluation
 | Route A | val comparison set, 2,000 | 0.501 | — | 7,600 ms |
 | Frozen SigLIP 1-NN (no training) | val, 5,000 | 0.756 | — | — |
 | Majority class | — | 0.064 | — | — |
+
+¹ CPU: ~2.2 s per page end-to-end on a laptop CPU (22 logical CPUs; decode + preprocessing + SigLIP + forward), ~5 s with OCR. The 875 ms figure in docs/final/ is the Laya forward alone over precomputed embeddings on a 12-vCPU Colab host. GPU latencies are the model forward over precomputed embeddings
+(batched, L4).
+
+Local CPU verification of the shipped release on the 1,000-image test subsample: image-only accuracy 0.864 (matches the L4), 0 errors, calibration monotone, no network access after the one-off SigLIP download.
 
 ![Headline accuracy](docs/figures/fig1_accuracy.png)
 ![Latency](docs/figures/fig2_latency.png)
@@ -178,6 +184,8 @@ image; greyscale or colour; any size or aspect ratio (letterboxed to 384×384
 internally, OCR runs on the original). PDFs must be rendered to images first
 (e.g. `pdf2image` or `pypdfium2` at ~150 dpi). Multi-page TIFFs: first page only.
 Images whose long side is below ~384 px are upscaled and lose detail.
+OCR (`--with-ocr` / `ocr=True`): the SDK warns when the local Tesseract version
+differs from training's 5.3.4; text may differ slightly.
 
 ---
 
@@ -191,6 +199,8 @@ Images whose long side is below ~384 px are upscaled and lose detail.
   letter (0.78), questionnaire (0.79), presentation (0.81) on the val comparison
   set — the report/publication, form/questionnaire and letter/memo/email
   neighbourhoods. Strongest: email (0.97), resume (0.93), advertisement (0.92).
+- **Per-class figures are indicative:** specification scored 0.758 image-only on the 1,000-image test subsample (0.873 image-only, 0.897 combined on the val comparison set) - per-class accuracy varies by sample; treat per-class figures as indicative.
+- **CPU latency:** ~2.2 s per page end-to-end on a laptop CPU (22 logical CPUs; decode + preprocessing + SigLIP + forward), ~5 s with OCR. The 875 ms figure in docs/final/ is the Laya forward alone over precomputed embeddings on a 12-vCPU Colab host.
 - **Domain:** RVL-CDIP vintage, greyscale, ~90 dpi. Validate before use on modern
   documents.
 - **Accuracy ceiling:** ~2% label noise + ~1.5% illegible pages in the training

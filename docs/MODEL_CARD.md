@@ -40,7 +40,7 @@ typed, calibrated decisions — a choice from a list, a score on a scale, or a y
 probability — rather than text. Laya-Vision lets it make those decisions about a
 scanned document image. The shipped task is 16-class document-type classification
 on RVL-CDIP: **86.2% accuracy, calibration error 0.015, ~15 ms per page on an L4,
-under a second on CPU.**
+~2.2 s per page end-to-end on a laptop CPU.**
 
 Code, training history and evaluation protocol: https://github.com/savita10/laya-vision
 
@@ -110,7 +110,8 @@ print(ans["choice"], ans["probabilities"][ans["choice"]])
 **Input formats:** any Pillow-readable raster (PNG/JPEG/TIFF/BMP/WebP), path or
 PIL image, greyscale or colour, any size (letterboxed to 384×384 internally; OCR
 on the original). Render PDFs to images first (~150 dpi). Multi-page TIFF: first
-page only. The optional combined view needs Tesseract installed.
+page only. The optional combined view needs Tesseract installed; the SDK warns when
+the local Tesseract version differs from training's 5.3.4 (text may differ slightly).
 
 ## Release contents
 
@@ -178,9 +179,14 @@ a pre-registered 1,000-image test subsample.
 
 | View | Test acc. (5,000) | ECE raw → cal. | Latency / image |
 |---|---|---|---|
-| combined | **0.862** | 0.029 → 0.015 | 15.3 ms batched · 43 ms batch-1 (L4) · 875 ms CPU |
+| combined | **0.862** | 0.029 → 0.015 | 15.3 ms batched · 43 ms batch-1 (L4) · ~2.2 s CPU end-to-end¹ |
 | image-only | 0.858 | 0.020 → 0.014 | 3.0 ms batched · 42 ms batch-1 (L4) |
 | text-only | 0.291 | 0.034 (T=1) | 15.6 ms batched |
+
+¹ CPU: ~2.2 s per page end-to-end on a laptop CPU (22 logical CPUs; decode + preprocessing + SigLIP + forward), ~5 s with OCR. The 875 ms figure in docs/final/ is the Laya forward alone over precomputed embeddings on a 12-vCPU Colab host. GPU latencies are the model forward over precomputed embeddings
+(batched, L4).
+
+Local CPU verification of the shipped release on the 1,000-image test subsample: image-only accuracy 0.864 (matches the L4), 0 errors, calibration monotone, no network access after the one-off SigLIP download.
 
 Same 1,000 test ids: Laya-Vision 0.873 vs Route A 0.510 (7.7 GPU-s/image).
 Val comparison set (2,000): 0.847 vs Route A 0.501. Majority class 0.064.
@@ -216,6 +222,8 @@ leaderboard scores partly fit noise.
   neighbourhood where image-only beats combined.
 - Weak on visually similar classes (report/publication, form/questionnaire,
   letter/memo/email).
+- Per-class accuracy: specification scored 0.758 image-only on the 1,000-image test subsample (0.873 image-only, 0.897 combined on the val comparison set) - per-class accuracy varies by sample; treat per-class figures as indicative.
+- CPU latency: ~2.2 s per page end-to-end on a laptop CPU (22 logical CPUs; decode + preprocessing + SigLIP + forward), ~5 s with OCR. The 875 ms figure in docs/final/ is the Laya forward alone over precomputed embeddings on a 12-vCPU Colab host.
 - Domain-bound to RVL-CDIP-like scans; validate before any other use.
 - Results are on a 5,000-image stratified subsample of the 40,000-image test
   split (full evaluation planned for v1.1).

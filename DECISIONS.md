@@ -889,3 +889,48 @@ same terms as the Route A test exception (2026-10-10):
 
 The script also exports the val comparison set
 (splits/val_comparison_2000_seed11.json); no exception is needed for val.
+
+## 2026-10-11 — Local pre-release test; CPU latency corrected
+The shipped release (release/, run02_final) was tested locally on CPU
+before upload. Report: local_test/REPORT.md (not committed).
+- Machine: Windows 11 laptop, 22 logical CPUs, torch 2.14.1+cpu with 16
+  threads, laya 0.3.24, transformers 4.49.0.
+- Data: the pre-registered 1,000-image test subsample, exported with
+  scripts/export_images.py (exception 2026-10-11). Its ids equal
+  splits/test_comparison_1000_seed17.json.
+
+Results:
+- tests/test_sdk_equivalence.py --release release: all 8 checks pass.
+- demo.py, image-only: accuracy 0.864 on 1,000 images, 0 errors. This
+  equals the L4's image-only result on the same ids.
+- Calibration: accuracy is monotone across probability buckets:
+  - < 0.5: 0.378
+  - 0.5–0.7: 0.673
+  - 0.7–0.9: 0.825
+  - 0.9+: 0.967
+- Edge cases behaved as specified.
+- demo.py resumed correctly after a SIGKILL.
+- --with-ocr ran with Tesseract 5.4.0 (training used 5.3.4; the
+  eng.traineddata is identical): 0.84 combined vs 0.86 image-only on the
+  same 100 images, within noise.
+- Under a socket guard, no SDK process attempted any network access. The
+  one-off SigLIP download was the only network access.
+
+Latency correction (human decision):
+- The docs' "~1 s on CPU" / "875 ms CPU" understated end-to-end CPU
+  latency. Measured batch-1, end to end (decode + preprocessing + SigLIP
+  + forward) on the laptop: mean 2,200 ms, p50 2,126 ms, of which SigLIP
+  and preprocessing take ~1.17 s. With OCR: ~5 s.
+- The 875 ms in docs/final/ is the Laya forward alone over precomputed
+  embeddings, on a 12-vCPU Colab host.
+- README.md and docs/MODEL_CARD.md now give ~2.2 s end to end (~5 s with
+  OCR), and explain the 875 ms in a results footnote and in Limitations.
+- docs/figures/fig2_latency.png was replaced with the corrected figure.
+
+Also added:
+- Limitations note: specification scored 0.758 image-only on the test
+  subsample (0.873 image-only, 0.897 combined on the val comparison set),
+  so per-class figures are indicative.
+- A Tesseract version-warning note in both docs.
+- demo.py now prints progress with flush=True, so piped logs survive a
+  kill.
