@@ -871,3 +871,21 @@ Observations:
 - The checkpoint loads with laya's invalid-temperatures warning: it ships
   temperatures outside the allowed range, and laya clamps them.
 - act_probability is 1.0 on every answer (upstream issue #185).
+
+## 2026-10-11 — Image export of the test subsample (recorded exception)
+Decision (human): scripts/export_images.py may read test labels, on the
+same terms as the Route A test exception (2026-10-10):
+- Scope: only the pre-registered 1,000-image test subsample,
+  splits/test_comparison_1000_seed17.json. With test.jsonl, the script
+  refuses any other comparison set, checks the records' sha256 exactly as
+  route_a.py does, and prints a notice.
+- Purpose: local testing of the released SDK and demo on real scans.
+- Timing: after Gate 4. Test is closed: nothing exported feeds training,
+  calibration, model selection or any reported number.
+- Output: <id>.png (the original scan, lossless, unresized) and
+  labels.csv (filename,label). Labels appear only in labels.csv, never
+  in file names.
+- The test-label rule in docs/PROJECT_SPEC.md now names this exception.
+
+The script also exports the val comparison set
+(splits/val_comparison_2000_seed11.json); no exception is needed for val.

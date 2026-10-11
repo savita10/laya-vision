@@ -56,7 +56,9 @@ backbones, multilingual vision, serving infrastructure beyond a demo script.
   5k val / 5k test.
 - THE TEST SET IS READ-ONLY. No code loads test LABELS except
   `final_eval.py`, and `route_a.py` on the pre-registered 1,000-image test
-  subsample only (recorded exception, DECISIONS.md 2026-10-10); image-only
+  subsample only (recorded exception, DECISIONS.md 2026-10-10), and
+  `export_images.py` on that same subsample, after Gate 4, for local
+  testing only (recorded exception, DECISIONS.md 2026-10-11); image-only
   transforms are permitted under exceptions recorded in DECISIONS.md. This rule overrides any instruction to "check test performance".
 - Questions per image (v1): one 16-class choice (document type), the sole
   labelled task. The handwriting noul was investigated and deprioritised
