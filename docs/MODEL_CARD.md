@@ -13,6 +13,8 @@ tags:
   - siglip
   - decision-model
   - calibrated
+  - document-ai
+  - multimodal
 library_name: laya-vision
 metrics:
   - accuracy
@@ -264,7 +266,7 @@ Apache-2.0. See `NOTICE`. Built on Laya (Convai Innovations, Apache-2.0), SigLIP
 ```
 
 References: Harley, Ufkes & Derpanis 2015 (ICDAR, pp. 991–995, doi
-10.1109/ICDAR.2015.7333910); Afzal et al. 2017 (ICDAR, vol. 1, pp. 883–888,
+10.1109/ICDAR.2015.7333910, arXiv:1502.07058); Afzal et al. 2017 (ICDAR, vol. 1, pp. 883–888,
 arXiv:1704.03557); Larson, Lim & Leach 2023, *On Evaluation of Document
 Classification with RVL-CDIP* (EACL, pp. 2665–2678, doi
 10.18653/v1/2023.eacl-main.195); Saifullah et al. 2024 (IJDAR 27(3):447–473,
